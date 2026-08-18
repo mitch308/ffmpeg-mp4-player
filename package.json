@@ -1,0 +1,12 @@
+{
+  "name": "ffmpeg-player",
+  "version": "1.0.0",
+  "description": "Web video player powered by ffmpeg with MSE streaming",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
