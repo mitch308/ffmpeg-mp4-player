@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FFmpeg Player</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>FFmpeg Player</h1>
+
+    <div class="url-bar">
+      <input
+        type="text"
+        id="urlInput"
+        placeholder="输入视频文件 URL（如 .mp4, .mkv 等）"
+        autocomplete="off"
+      />
+      <button id="loadBtn">加载</button>
+    </div>
+
+    <div id="status" class="status hidden"></div>
+
+    <div class="player-wrapper">
+      <video id="video" controls style="display:none;"></video>
+      <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <span>正在加载视频...</span>
+      </div>
+      <div id="error" class="error hidden"></div>
+    </div>
+
+    <div class="info" id="info" style="display:none;">
+      <span id="infoDuration">时长: --</span>
+      <span id="infoResolution">分辨率: --</span>
+      <span id="infoCodec">编码: --</span>
+    </div>
+  </div>
+
+  <script src="player.js"></script>
+</body>
+</html>
