@@ -12,7 +12,7 @@ const {
 } = require('./lib/session-manager');
 
 const app = express();
-const PORT = 3000;
+const PORT = 4000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -55,15 +55,9 @@ app.get('/api/sessions/:id/stream', (req, res) => {
   res.setHeader('Content-Type', 'video/mp4');
 
   let isClientConnected = true;
-  req.on('close', () => {
-    isClientConnected = false;
-    // 客户端断开时不销毁 session，只停止 stream
-    stopStream(session);
-  });
-
   console.log(`Stream start: session=${session.id}, start=${startTime}`);
 
-  startStream(
+  const myProc = startStream(
     session,
     startTime,
     (chunk) => {
@@ -73,17 +67,25 @@ app.get('/api/sessions/:id/stream', (req, res) => {
     },
     (err) => {
       console.error(`Stream error for session ${session.id}:`, err.message);
-      if (isClientConnected) {
+      if (isClientConnected && !res.writableEnded) {
         res.end();
       }
     },
-    (code) => {
-      console.log(`Stream ended for session ${session.id}, code=${code}`);
-      if (isClientConnected) {
+    () => {
+      if (isClientConnected && !res.writableEnded) {
         res.end();
       }
     }
   );
+
+  // 客户端断开时只停止「本请求」启动的进程；若已被更新的 seek 请求替换，
+  // 则不能误杀新进程（session.process !== myProc）。
+  req.on('close', () => {
+    isClientConnected = false;
+    if (session.process === myProc) {
+      stopStream(session);
+    }
+  });
 });
 
 // 销毁会话

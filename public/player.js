@@ -55,6 +55,7 @@
   var gen = 0;                 // 代次令牌，使在途异步操作失效
   var pendingBuffers = [];     // 待 append 的分片队列
   var rebuilding = false;      // MediaSource 重建期间，抑制 seeking 处理
+  var selfSeeking = false;     // 程序化设置 currentTime 以对齐新缓冲区时置位，onSeeking 消费一次
   var autoPlay = false;        // canplay 后是否自动续播
 
   // ===== UI helpers =====
@@ -98,6 +99,7 @@
   // ===== 流终止 / 资源释放 =====
   function teardownMediaSource() {
     gen++; // 使所有在途异步操作失效
+    selfSeeking = false; // 复位自激标志，防止上次程序化 seek 未被消费而残留
     if (abortController) {
       try { abortController.abort(); } catch (e) {}
       abortController = null;
@@ -171,9 +173,26 @@
         return;
       }
       sourceBuffer.mode = 'segments';
-      // 设置 MediaSource 时长，使原生 <video controls> 进度条可达未缓冲点，
-      // 否则 empty_moov 输出下 video.duration 保持 Infinity/NaN，精确 seek 不可达。
+      // 关键：seek 重建后新 ffmpeg 流的时间戳从 0 重新起算（-ss 重置了时间线），
+      // 用 timestampOffset 把它偏移到原片的 start 位置，使 video.currentTime
+      // 始终反映原片真实位置，进度条刻度与总时长对齐（而非从 0 重新计数）。
+      // 初始加载 start=0，offset=0 无副作用。
+      try { sourceBuffer.timestampOffset = start; } catch (e) {}
+      // 设置 MediaSource 时长为原片总时长，使原生进度条覆盖整片范围。
       try { mediaSource.duration = session.duration; } catch (e) {}
+      // 关键：video.load() 后 currentTime 通常被重置为 0（m2ts 等源不会保留 seek 目标，
+      // 与某些 mp4 的保留行为不同）。但 timestampOffset 让新缓冲区从 start 开始，若播放头
+      // 停在 0，会落在缓冲区外 → 永远 waiting 不播放。故必须把播放头拨回 start。
+      // 该程序化赋值会触发 seeking 事件：用 selfSeeking 标志让 onSeeking 识别这是自触发
+      // （而非用户拖拽），跳过重建，避免无限循环。标志在 onSeeking 顶部消费。
+      if (start > 0) {
+        try {
+          selfSeeking = true;
+          video.currentTime = start;
+        } catch (e) {
+          selfSeeking = false;
+        }
+      }
       sourceBuffer.addEventListener('updateend', pumpBuffer);
       sourceBuffer.addEventListener('error', function (e) {
         if (myGen !== gen) return;
@@ -234,10 +253,16 @@
   function onSeeking() {
     if (!mseAvailable()) return;     // 无 MSE 回退模式：direct /stream 不支持 Range，原生 seek 本就受限，不处理
     if (rebuilding) return;            // src 变更期间忽略
+    // 消费 startStreamAt 中程序化设置 currentTime 触发的自激 seek（拨回 start 以对齐新缓冲区）。
+    // 置位必伴随一次 currentTime 变化，seeking 必触发，标志必被消费；此处 return 跳过重建，防无限循环。
+    if (selfSeeking) {
+      selfSeeking = false;
+      return;
+    }
     if (!session) return;
     var t = video.currentTime;
     if (isBufferedAt(t)) return;       // 已缓冲，交给原生播放
-    // 未缓冲 -> 精确 seek：abort 当前 stream、重建 MediaSource、用新 start 重新请求
+    // 真正拖到未缓冲区域（无论前后向）-> 按 spec 结束当前 ffmpeg、从 t 精确 seek 重新转码
     setStatus('精确 seek 到 ' + formatTime(t) + ' ...');
     show(loading);
     teardownMediaSource();
