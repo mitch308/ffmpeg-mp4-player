@@ -63,7 +63,13 @@
   function show(el) { el.classList.remove('hidden'); el.style.display = ''; }
   function hide(el) { el.classList.add('hidden'); el.style.display = 'none'; }
 
-  function setError(msg) { errorBox.textContent = msg; show(errorBox); }
+  function setError(msg) {
+    // 统一复位重建标记：错误路径（addSourceBuffer 抛错、流读取失败等）下
+    // loadedmetadata 不会触发，需在此复位，否则一次失败后 seek 永久失效。
+    rebuilding = false;
+    errorBox.textContent = msg;
+    show(errorBox);
+  }
   function clearError() { errorBox.textContent = ''; hide(errorBox); }
   function setStatus(msg) {
     status.textContent = msg || '';
@@ -123,8 +129,24 @@
     try {
       sourceBuffer.appendBuffer(next);
     } catch (e) {
-      // 队列过满（QuotaExceeded）或缓冲已移除：丢弃当前分片，继续排空
-      pumpBuffer();
+      if (e && e.name === 'QuotaExceededError' && sourceBuffer.buffered.length > 0) {
+        // 缓冲区配额耗尽：异步移除已播放部分（currentTime 之前 20s）释放空间，
+        // 把当前分片放回队头，等 remove 触发的 updateend 后由 pumpBuffer 自动重试。
+        var removeEnd = Math.max(0, video.currentTime - 20);
+        if (sourceBuffer.buffered.start(0) < removeEnd) {
+          pendingBuffers.unshift(next);
+          try { sourceBuffer.remove(sourceBuffer.buffered.start(0), removeEnd); }
+          catch (e2) { /* remove 失败：丢弃当前分片，继续排空队列 */
+            pumpBuffer();
+          }
+        } else {
+          // 无可移除范围：丢弃当前分片，继续排空，避免死循环。
+          pumpBuffer();
+        }
+      } else {
+        // 其他类型错误：丢弃当前分片，继续排空。
+        pumpBuffer();
+      }
     }
   }
 
@@ -149,6 +171,9 @@
         return;
       }
       sourceBuffer.mode = 'segments';
+      // 设置 MediaSource 时长，使原生 <video controls> 进度条可达未缓冲点，
+      // 否则 empty_moov 输出下 video.duration 保持 Infinity/NaN，精确 seek 不可达。
+      try { mediaSource.duration = session.duration; } catch (e) {}
       sourceBuffer.addEventListener('updateend', pumpBuffer);
       sourceBuffer.addEventListener('error', function (e) {
         if (myGen !== gen) return;
@@ -207,6 +232,7 @@
   }
 
   function onSeeking() {
+    if (!mseAvailable()) return;     // 无 MSE 回退模式：direct /stream 不支持 Range，原生 seek 本就受限，不处理
     if (rebuilding) return;            // src 变更期间忽略
     if (!session) return;
     var t = video.currentTime;
@@ -305,7 +331,7 @@
 
   video.addEventListener('canplay', function () {
     hide(loading);
-    if (status.textContent.indexOf('精确 seek') !== 0) setStatus('');
+    setStatus('');
     if (autoPlay) {
       autoPlay = false;
       var p = video.play();
