@@ -23,27 +23,52 @@
   var infoDuration = document.getElementById('infoDuration');
   var infoResolution = document.getElementById('infoResolution');
   var infoCodec = document.getElementById('infoCodec');
+  var infoAudio = document.getElementById('infoAudio');
+  var infoMode = document.getElementById('infoMode');
 
-  // ===== 候选 codec（服务端固定输出 libx264，均为 H.264）=====
-  var CODEC_CANDIDATES = [
-    'video/mp4; codecs="avc1.42E01E"', // Baseline 3.0
-    'video/mp4; codecs="avc1.4d401e"', // Main 3.0
-    'video/mp4; codecs="avc1.640028"', // High 4.0
-    'video/mp4; codecs="avc1.640029"'  // High 4.1
+  // 编码器名 → 展示名
+  var ENCODER_LABELS = {
+    h264_nvenc: 'NVIDIA NVENC',
+    h264_qsv: 'Intel QSV',
+    h264_amf: 'AMD AMF',
+    h264_vaapi: 'VA-API',
+    h264_videotoolbox: 'VideoToolbox',
+    libx264: 'libx264'
+  };
+
+  function describeMode(s) {
+    if (s.streamMode === 'copy') return '直通（无转码）';
+    var enc = ENCODER_LABELS[s.encoder] || s.encoder || '';
+    return (s.streamMode === 'hw' ? '硬件转码 ' : '软件转码 ') + enc;
+  }
+
+  // ===== 候选 codec =====
+  // 服务端输出恒为 H.264（直通保留源 profile/level，故候选需覆盖高级别），
+  // 音频存在时恒为 AAC-LC（mp4a.40.2）。编码器为 libx264 转码时通常是 High profile。
+  var VIDEO_CODECS = [
+    'avc1.42E01E', // Baseline 3.0
+    'avc1.4d401e', // Main 3.0
+    'avc1.640028', // High 4.0
+    'avc1.640029', // High 4.1
+    'avc1.640032', // High 5.0
+    'avc1.640033'  // High 5.1
   ];
 
-  function pickCodec() {
+  function pickCodec(session) {
+    var hasAudio = !!(session && session.audioCodec);
+    var fallback = 'video/mp4; codecs="' + VIDEO_CODECS[0] + (hasAudio ? ',mp4a.40.2' : '') + '"';
     if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
-      for (var i = 0; i < CODEC_CANDIDATES.length; i++) {
-        if (MediaSource.isTypeSupported(CODEC_CANDIDATES[i])) return CODEC_CANDIDATES[i];
+      for (var i = 0; i < VIDEO_CODECS.length; i++) {
+        var mime = 'video/mp4; codecs="' + VIDEO_CODECS[i] + (hasAudio ? ',mp4a.40.2' : '') + '"';
+        if (MediaSource.isTypeSupported(mime)) return mime;
       }
     }
-    return CODEC_CANDIDATES[0];
+    return fallback;
   }
 
   function mseAvailable() {
     return !!(window.MediaSource && typeof MediaSource.isTypeSupported === 'function' &&
-              MediaSource.isTypeSupported(pickCodec()));
+              MediaSource.isTypeSupported(pickCodec(session)));
   }
 
   // ===== 运行时状态 =====
@@ -155,7 +180,7 @@
   // ===== 加载流（从给定 start 秒）=====
   function startStreamAt(start) {
     var myGen = gen;
-    var codec = pickCodec();
+    var codec = pickCodec(session);
 
     rebuilding = true;
     mediaSource = new MediaSource();
@@ -223,22 +248,62 @@
   }
 
   function pumpReader(reader, myGen) {
-    return reader.read().then(function (res) {
-      if (res.done) {
-        // 流自然结束：结束当前 MediaSource
-        if (myGen === gen && mediaSource && mediaSource.readyState === 'open' &&
-            sourceBuffer && !sourceBuffer.updating) {
-          try { mediaSource.endOfStream(); } catch (e) {}
+    // 水位线：缓冲领先播放头过多时暂停读取。TCP 背压会沿
+    // 浏览器→Node→ffmpeg stdout 管道传导，ffmpeg 阻塞在写出上，
+    // 全链路（浏览器 MSE 配额 / Node 缓冲 / ffmpeg 内存）都不再堆积。
+    // 没有它，4x 实时的转码速度会迅速撑爆 Chrome MSE 配额（约 150MB），
+    // 之后 appendBuffer 连续 QuotaExceededError、chunk 被静默丢弃，
+    // buffered 出现空洞，播放头撞洞后永久卡死。
+    var READ_HIGH_WATER = 45; // 领先播放头超过该秒数 → 暂停读取
+    var READ_LOW_WATER = 15;  // 领先回落到该秒数以下 → 恢复读取
+
+    function bufferedAhead() {
+      if (!video.buffered) return 0;
+      for (var i = 0; i < video.buffered.length; i++) {
+        if (video.currentTime >= video.buffered.start(i) &&
+            video.currentTime <= video.buffered.end(i)) {
+          return video.buffered.end(i) - video.currentTime;
         }
+      }
+      return 0;
+    }
+
+    function step() {
+      if (myGen !== gen) return;
+      if (bufferedAhead() > READ_HIGH_WATER) {
+        // 停靠：等播放消耗。timeupdate 仅在播放时触发，暂停时停靠是正确行为；
+        // seek/换流会 gen++，监听器自行退役。
+        var onCheck = function () {
+          if (myGen !== gen) {
+            video.removeEventListener('timeupdate', onCheck);
+            return;
+          }
+          if (bufferedAhead() <= READ_LOW_WATER) {
+            video.removeEventListener('timeupdate', onCheck);
+            step();
+          }
+        };
+        video.addEventListener('timeupdate', onCheck);
         return;
       }
-      if (myGen !== gen) return;
-      enqueueBuffer(res.value);
-      return pumpReader(reader, myGen);
-    }).catch(function (e) {
-      if (myGen !== gen) return;
-      if (e.name !== 'AbortError') setError('读取流失败: ' + e.message);
-    });
+      reader.read().then(function (res) {
+        if (myGen !== gen) return;
+        if (res.done) {
+          // 流自然结束：结束当前 MediaSource
+          if (mediaSource && mediaSource.readyState === 'open' &&
+              sourceBuffer && !sourceBuffer.updating) {
+            try { mediaSource.endOfStream(); } catch (e) {}
+          }
+          return;
+        }
+        enqueueBuffer(res.value);
+        step();
+      }).catch(function (e) {
+        if (myGen !== gen) return;
+        if (e.name !== 'AbortError') setError('读取流失败: ' + e.message);
+      });
+    }
+    step();
   }
 
   // ===== seek 判定 =====
@@ -314,15 +379,20 @@
           duration: data.duration,
           width: data.width,
           height: data.height,
-          codec: data.codec
+          codec: data.codec,
+          audioCodec: data.audioCodec || null,
+          streamMode: data.streamMode || 'sw',
+          encoder: data.encoder || null
         };
 
         infoDuration.textContent = '时长: ' + formatTime(session.duration);
         infoResolution.textContent = '分辨率: ' + session.width + 'x' + session.height;
-        infoCodec.textContent = '编码: ' + session.codec;
+        infoCodec.textContent = '编码: ' + session.codec + ' / ' + (data.pixFmt || '');
+        infoAudio.textContent = '音频: ' + (session.audioCodec ? 'AAC' : '无');
+        infoMode.textContent = '方式: ' + describeMode(session);
         show(info);
 
-        setStatus('正在转码并缓冲...');
+        setStatus(session.streamMode === 'copy' ? '正在缓冲...' : '正在转码并缓冲...');
         show(video);
         autoPlay = true;
 
@@ -349,6 +419,19 @@
   });
 
   video.addEventListener('seeking', onSeeking);
+
+  // 防御：播放头撞进 buffered 空洞（如历史丢 chunk 造成）时跳到下一段起点。
+  // 若是无数据可播（直播边缘/转码跟不上），前方没有 range，不会触发误跳。
+  video.addEventListener('waiting', function () {
+    if (!session || video.seeking || rebuilding) return;
+    var t = video.currentTime;
+    for (var i = 0; i < video.buffered.length; i++) {
+      if (video.buffered.start(i) > t) {
+        video.currentTime = video.buffered.start(i);
+        return;
+      }
+    }
+  });
 
   video.addEventListener('loadedmetadata', function () {
     rebuilding = false; // src 重建窗口结束

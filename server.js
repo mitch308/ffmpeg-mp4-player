@@ -8,11 +8,16 @@ const {
   stopStream,
   destroySession,
   touchSession,
-  getSessionCount
+  getSessionCount,
+  currentStrategy
 } = require('./lib/session-manager');
+const { getCaps } = require('./lib/hw-accel');
 
 const app = express();
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
+
+// 启动即探测硬件能力（结果缓存，供会话决策与状态查询）
+const hwCapsPromise = getCaps();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -26,14 +31,24 @@ app.post('/api/sessions', async (req, res) => {
     }
 
     const session = await createSession(url);
-    console.log(`Session created: ${session.id} for ${url}`);
+    console.log(
+      `Session created: ${session.id} for ${url} ` +
+      `(strategy=${currentStrategy(session).label}, codec=${session.probeResult.codec}/${session.probeResult.pixFmt})`
+    );
 
+    const strategy = currentStrategy(session);
     res.json({
       sessionId: session.id,
       duration: session.probeResult.duration,
       width: session.probeResult.width,
       height: session.probeResult.height,
-      codec: session.probeResult.codec
+      codec: session.probeResult.codec,
+      // 输出视频恒为 H.264；音频存在时恒为 AAC（拷贝或转码）
+      audioCodec: session.probeResult.audio ? 'aac' : null,
+      pixFmt: session.probeResult.pixFmt,
+      streamMode: strategy.label,                       // copy | hw | sw
+      encoder: strategy.encoder || strategy.label,      // 直通时无编码器
+      hw: strategy.label === 'hw'
     });
   } catch (err) {
     console.error('Failed to create session:', err.message);
@@ -100,9 +115,15 @@ app.delete('/api/sessions/:id', (req, res) => {
 });
 
 // 健康检查
-app.get('/api/status', (req, res) => {
+app.get('/api/status', async (req, res) => {
+  const caps = await hwCapsPromise;
   res.json({
-    activeSessions: getSessionCount()
+    activeSessions: getSessionCount(),
+    hw: {
+      encoder: caps.encoder,
+      label: caps.label,
+      mode: caps.mode
+    }
   });
 });
 
