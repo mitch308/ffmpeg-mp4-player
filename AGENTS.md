@@ -32,6 +32,7 @@
 - 以上两类问题在浏览器端均只表现为 `CHUNK_DEMUXER_ERROR_APPEND_FAILED`（UI 上是泛泛的"播放错误"），服务端与 console 都无报错——遇到"播放失败但无日志"先用无头浏览器对 init segment 做最小 append 实验。
 - QSV 硬解必须用显式解码器（`-c:v hevc_qsv` 等，见 `hw-accel.js` 的 `decoderByCodec`），不要用 `-hwaccel qsv` 提示：提示路径 + 硬件编码器组合存在每帧表面泄漏（内存 ~48MB/s 增长，数分钟后 ffmpeg 无声崩溃，表现为播放中途断流且无任何日志）；显式解码器稳定且约 3-4x 实时。其他厂商（nvenc/amf）未经本机验证，暂保留 -hwaccel 提示。
 - 客户端 `pumpReader` 的水位线（45s 暂停 / 15s 恢复）不能删：转码速度远快于实时，若无水位线会撑爆 Chrome MSE 配额（4K 片约 117 秒 ≈ 150MB），之后 appendBuffer 连续 QuotaExceededError 走静默丢 chunk 分支，buffered 出现空洞、播放头撞洞永久卡死（表现为"播放到某处停止且无任何报错"）。
+- 客户端流中断走自动恢复（`handleStreamFailure`：从当前播放位置重建流，连续 4 次失败才报错），不要改回直接 setError：数小时长片播放中瞬时网络抖动（切后台被系统/浏览器切断、休眠唤醒等）是常态，终态报错等于播放报废。
 
 ## 测试
 

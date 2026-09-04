@@ -229,6 +229,29 @@
     });
   }
 
+  var networkFailStreak = 0; // 连续网络失败次数（收到数据即清零）
+
+  // 流中断自动恢复：长片（数小时）播放中任何瞬时网络抖动都不应终局。
+  // 从当前播放位置重建流（与 seek 同路径），连续失败超限才报错。
+  // 服务端在客户端断开时会 kill 旧 ffmpeg，重建即从 resumeAt 精确重转。
+  function handleStreamFailure(myGen) {
+    if (myGen !== gen) return; // 已有新流接管（如用户 seek）
+    if (networkFailStreak >= 4) {
+      setError('流中断且自动恢复失败，请重新加载');
+      return;
+    }
+    networkFailStreak++;
+    var resumeAt = video.currentTime;
+    var wasPlaying = !video.paused && !video.ended;
+    setStatus('连接中断，正在从 ' + formatTime(resumeAt) + ' 恢复...');
+    setTimeout(function () {
+      if (myGen !== gen) return; // 期间发生了 seek/重建
+      teardownMediaSource();
+      autoPlay = wasPlaying;
+      startStreamAt(resumeAt);
+    }, 1000);
+  }
+
   function fetchStream(start, myGen) {
     abortController = new AbortController();
     var url = '/api/sessions/' + encodeURIComponent(session.id) +
@@ -243,7 +266,7 @@
       })
       .catch(function (e) {
         if (myGen !== gen) return;
-        if (e.name !== 'AbortError') setError('请求流失败: ' + e.message);
+        if (e.name !== 'AbortError') handleStreamFailure(myGen);
       });
   }
 
@@ -297,10 +320,11 @@
           return;
         }
         enqueueBuffer(res.value);
+        networkFailStreak = 0; // 收到数据：恢复链路健康
         step();
       }).catch(function (e) {
         if (myGen !== gen) return;
-        if (e.name !== 'AbortError') setError('读取流失败: ' + e.message);
+        if (e.name !== 'AbortError') handleStreamFailure(myGen);
       });
     }
     step();
@@ -347,6 +371,7 @@
   // ===== 加载入口 =====
   function load() {
     clearError();
+    networkFailStreak = 0;
     var url = urlInput.value.trim();
     if (!url) { setError('请输入视频 URL'); return; }
 
