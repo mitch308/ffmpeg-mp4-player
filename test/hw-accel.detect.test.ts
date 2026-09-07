@@ -1,7 +1,7 @@
-// test/hw-accel.detect.test.js — 真实 ffmpeg 参与的探测集成测试
-const { test } = require('node:test');
-const assert = require('node:assert');
-const { detectCaps, resetCaps, ENCODER_PROFILES } = require('../lib/hw-accel');
+// test/hw-accel.detect.test.ts — 真实 ffmpeg 参与的探测集成测试
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { detectCaps, resetCaps, ENCODER_PROFILES } from '../src/lib/hw-accel';
 
 test('FFMPEG_HW_ENCODER=none 强制回退 libx264', async () => {
   process.env.FFMPEG_HW_ENCODER = 'none';

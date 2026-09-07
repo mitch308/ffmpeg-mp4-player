@@ -1,21 +1,30 @@
-// test/helpers/samples.js
+// test/helpers/samples.ts
 // 用捆绑的 ffmpeg 生成测试样本（懒加载，生成一次后复用）
-const { execFileSync } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+import { execFileSync } from 'child_process';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 
-const { getFfmpegPath } = require('../../lib/ffmpeg-path');
+import { getFfmpegPath } from '../../src/lib/ffmpeg-path';
 
-let cache = null;
+export interface Samples {
+  dir: string;
+  h264Aac: string;
+  h264NoAudio: string;
+  h264Hi10: string;
+  hevcHi10: string;
+  hevc8: string;
+}
+
+let cache: Samples | null = null;
 
 // 1 秒 320x240 样本，足够 probe/冒烟验证
-function ensureSamples() {
+export function ensureSamples(): Samples {
   if (cache) return cache;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffmpeg-player-test-'));
   const ff = getFfmpegPath();
 
-  const gen = (file, videoArgs, audioArgs) => {
+  const gen = (file: string, videoArgs: string[], audioArgs: string[] | null): string => {
     const out = path.join(dir, file);
     const args = [
       '-v', 'error',
@@ -45,5 +54,3 @@ function ensureSamples() {
   };
   return cache;
 }
-
-module.exports = { ensureSamples };

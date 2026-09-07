@@ -1,18 +1,31 @@
-// lib/stream-strategy.js
+// src/lib/stream-strategy.ts
 // 格式自适应决策：根据源视频探针结果 + 部署机硬件能力，产出按优先级排列的播放策略链。
 // 纯函数，不触碰进程/IO，便于单测。
-const { ENCODER_PROFILES } = require('./hw-accel');
+import { ENCODER_PROFILES, type EncoderProfile, type Caps } from './hw-accel';
+import type { ProbeResult } from './ffprobe';
+
+// 字段与旧 JS 策略对象一致：copy 策略会显式携带 null（测试断言 null 而非缺省）
+export interface Strategy {
+  label: string;
+  video: 'copy' | 'transcode';
+  audio: 'copy' | 'aac' | 'none';
+  encoder?: string | null;
+  videoBitrate?: number;
+  audioLayout?: string | null;
+  hwDecode?: string | null;
+  decoder?: string | null;
+}
 
 /**
  * 直通（remux）资格：浏览器 MSE 可直接解码的 H.264 8bit 4:2:0。
  * 10bit（yuv420p10le）、422/444 等一概转码。
  */
-function copyEligible(probeResult) {
+function copyEligible(probeResult: ProbeResult): boolean {
   return probeResult.codec === 'h264' && probeResult.pixFmt === 'yuv420p';
 }
 
 /** 音频策略：AAC 拷贝、其余转 AAC（播放端永远拿到 AAC）、无音频关闭 */
-function audioStrategy(probeResult) {
+function audioStrategy(probeResult: ProbeResult): 'copy' | 'aac' | 'none' {
   if (!probeResult.audio) return 'none';
   return probeResult.audio.codec === 'aac' ? 'copy' : 'aac';
 }
@@ -24,7 +37,7 @@ function audioStrategy(probeResult) {
  * （CHUNK_DEMUXER_ERROR_APPEND_FAILED）。强制映射为 AAC 标准布局
  * （6 声道 → 5.1 back、8 声道 → 7.1 back，均已实测被 Chrome 接受）。
  */
-function audioLayout(probeResult) {
+function audioLayout(probeResult: ProbeResult): string | null {
   if (!probeResult.audio) return null;
   const ch = probeResult.audio.channels || 0;
   if (ch <= 2) return null;
@@ -39,7 +52,7 @@ function audioLayout(probeResult) {
  * 10bit 源走软解（帧在内存，自动 swscale 转 8bit）+ 硬件编码。
  * 硬解提示不可用时 ffmpeg 自动回退软解，编码不受影响。
  */
-function hwDecodable(profile, probeResult) {
+function hwDecodable(profile: EncoderProfile, probeResult: ProbeResult): boolean {
   if (!profile.hwaccel) return false;
   if (!profile.hwDecodableCodecs.includes(probeResult.codec)) return false;
   return probeResult.pixFmt === 'yuv420p';
@@ -50,7 +63,7 @@ function hwDecodable(profile, probeResult) {
  * 1080p30 ≈ 6.2Mbps、4K30 ≈ 25Mbps、4K60 ≈ 50Mbps。
  * 不指定时硬件编码器（qsv 等）默认走极低码率目标，是 4K 发糊的根因。
  */
-function targetBitrateKbps(probeResult) {
+function targetBitrateKbps(probeResult: ProbeResult): number {
   const { width = 0, height = 0, fps = 0 } = probeResult;
   if (!(width > 0) || !(height > 0)) return 6000; // 未知尺寸按 1080p 档
   const kbps = width * height * (fps > 0 ? fps : 30) * 0.1 / 1000;
@@ -58,7 +71,7 @@ function targetBitrateKbps(probeResult) {
 }
 
 /** 构造转码策略：按编码器 profile 决定硬解方式与编码器 */
-function transcodeStrategy(probeResult, caps) {
+function transcodeStrategy(probeResult: ProbeResult, caps: Caps): Strategy {
   const profile = ENCODER_PROFILES[caps.encoder] || ENCODER_PROFILES.libx264;
   const canHwDecode = hwDecodable(profile, probeResult);
   return {
@@ -83,8 +96,8 @@ function transcodeStrategy(probeResult, caps) {
  * @param {object} probeResult - ffprobe 结果（codec/pixFmt/audio）
  * @param {{encoder: string, mode: string}} caps - hw-accel 探测结果
  */
-function strategyChain(probeResult, caps) {
-  const chain = [];
+export function strategyChain(probeResult: ProbeResult, caps: Caps): Strategy[] {
+  const chain: Strategy[] = [];
   if (copyEligible(probeResult)) {
     chain.push({
       label: 'copy',
@@ -98,5 +111,3 @@ function strategyChain(probeResult, caps) {
   chain.push(transcodeStrategy(probeResult, caps));
   return chain;
 }
-
-module.exports = { strategyChain };

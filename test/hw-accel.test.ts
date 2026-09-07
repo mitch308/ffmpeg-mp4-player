@@ -1,7 +1,7 @@
-// test/hw-accel.test.js
-const { test } = require('node:test');
-const assert = require('node:assert');
-const { parseEncodersOutput, pickEncoder, ENCODER_PROFILES } = require('../lib/hw-accel');
+// test/hw-accel.test.ts
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { parseEncodersOutput, pickEncoder, ENCODER_PROFILES } from '../src/lib/hw-accel';
 
 // 与 `ffmpeg -hide_banner -encoders` 输出同构的片段
 const SAMPLE_ENCODERS_OUTPUT = `

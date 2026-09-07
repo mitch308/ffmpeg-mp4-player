@@ -1,16 +1,17 @@
-// test/ffmpeg-process.test.js — 按策略构建 ffmpeg 参数（纯函数部分）
-const { test } = require('node:test');
-const assert = require('node:assert');
-const { buildArgs } = require('../lib/ffmpeg-process');
+// test/ffmpeg-process.test.ts — 按策略构建 ffmpeg 参数（纯函数部分）
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { buildArgs } from '../src/lib/ffmpeg-process';
+import type { Strategy } from '../src/lib/stream-strategy';
 
-const copyStrat = { label: 'copy', video: 'copy', encoder: null, hwDecode: null, audio: 'copy' };
-const swStrat = { label: 'sw', video: 'transcode', encoder: 'libx264', hwDecode: null, audio: 'none', videoBitrate: 6000 };
-const nvencHw = { label: 'hw', video: 'transcode', encoder: 'h264_nvenc', hwDecode: 'cuda', audio: 'aac', videoBitrate: 25000 };
-const amfHw = { label: 'hw', video: 'transcode', encoder: 'h264_amf', hwDecode: 'd3d11va', audio: 'copy', videoBitrate: 6000 };
-const qsvHw = { label: 'hw', video: 'transcode', encoder: 'h264_qsv', hwDecode: 'qsv', decoder: 'hevc_qsv', audio: 'aac', videoBitrate: 15000 };
-const nvencSwDecode = { label: 'hw', video: 'transcode', encoder: 'h264_nvenc', hwDecode: null, audio: 'none', videoBitrate: 25000 };
+const copyStrat: Strategy = { label: 'copy', video: 'copy', encoder: null, hwDecode: null, audio: 'copy' };
+const swStrat: Strategy = { label: 'sw', video: 'transcode', encoder: 'libx264', hwDecode: null, audio: 'none', videoBitrate: 6000 };
+const nvencHw: Strategy = { label: 'hw', video: 'transcode', encoder: 'h264_nvenc', hwDecode: 'cuda', audio: 'aac', videoBitrate: 25000 };
+const amfHw: Strategy = { label: 'hw', video: 'transcode', encoder: 'h264_amf', hwDecode: 'd3d11va', audio: 'copy', videoBitrate: 6000 };
+const qsvHw: Strategy = { label: 'hw', video: 'transcode', encoder: 'h264_qsv', hwDecode: 'qsv', decoder: 'hevc_qsv', audio: 'aac', videoBitrate: 15000 };
+const nvencSwDecode: Strategy = { label: 'hw', video: 'transcode', encoder: 'h264_nvenc', hwDecode: null, audio: 'none', videoBitrate: 25000 };
 
-const idx = (args, x) => args.indexOf(x);
+const idx = (args: string[], x: string) => args.indexOf(x);
 
 test('直通：-c:v copy，无编码器/强制关键帧参数，负时间戳归零', () => {
   const a = buildArgs('http://x/v.ts', 12.5, copyStrat);
@@ -105,7 +106,7 @@ test('直通路径无任何码率控制参数', () => {
 });
 
 test('非 AAC 音频转 AAC 128k', () => {
-  const s = Object.assign({}, swStrat, { audio: 'aac' });
+  const s: Strategy = Object.assign({}, swStrat, { audio: 'aac' });
   const a = buildArgs('u', 0, s);
   assert.ok(a.includes('aac'));
   assert.ok(idx(a, '-b:a') !== -1 && a[idx(a, '-b:a') + 1] === '128k');
@@ -130,13 +131,13 @@ test('所有路径丢弃章节映射（-map_chapters -1），防止 MKV 章节�
 });
 
 test('AAC 转码环绕声源：aformat 强制标准布局；立体声/拷贝路径无 -af', () => {
-  const surround = Object.assign({}, swStrat, { audio: 'aac', audioLayout: '5.1' });
+  const surround: Strategy = Object.assign({}, swStrat, { audio: 'aac', audioLayout: '5.1' });
   const a = buildArgs('u', 0, surround);
   const i = idx(a, '-af');
   assert.ok(i !== -1, '环绕声 AAC 转码应带 -af');
   assert.strictEqual(a[i + 1], 'aformat=channel_layouts=5.1');
   // 无 audioLayout 的 AAC 转码不加滤镜
-  const plain = Object.assign({}, swStrat, { audio: 'aac', audioLayout: null });
+  const plain: Strategy = Object.assign({}, swStrat, { audio: 'aac', audioLayout: null });
   assert.strictEqual(idx(buildArgs('u', 0, plain), '-af'), -1);
   // 拷贝/关闭音频路径不加滤镜
   assert.strictEqual(idx(buildArgs('u', 0, copyStrat), '-af'), -1);

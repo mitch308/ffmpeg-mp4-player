@@ -1,20 +1,27 @@
-// test/session-manager.test.js — 策略降级链（注入假 ffmpeg 工厂）
-const { test, beforeEach } = require('node:test');
-const assert = require('node:assert');
-const {
+// test/session-manager.test.ts — 策略降级链（注入假 ffmpeg 工厂）
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import {
   createSession, startStream, destroySession, getSession, currentStrategy
-} = require('../lib/session-manager');
-const { ensureSamples } = require('./helpers/samples');
+} from '../src/lib/session-manager';
+import { ensureSamples } from './helpers/samples';
+import type { createFfmpegProcess } from '../src/lib/ffmpeg-process';
+import type { Strategy } from '../src/lib/stream-strategy';
+
+type ProcHandle = { pid: number; kill(): void };
+type CreateProc = typeof createFfmpegProcess;
 
 // 假进程工厂：script 数组按次序决定每次创建的进程行为
 //  { fail: true } 启动即退出码 1；{ data: n } 先吐 n 字节再由外部控制退出
-function fakeFactory(scripts, calls) {
+function fakeFactory(scripts: Array<{ fail?: boolean; data?: number }>, calls: string[]): CreateProc {
   let n = 0;
-  return function createProc({ strategy, onData, onError, onExit }) {
+  return function createProc({ strategy, onData, onError, onExit }: {
+    strategy: Strategy; onData: (chunk: Buffer) => void; onError: (err: Error) => void; onExit: (code: number | null) => void;
+  }): ProcHandle {
     const step = scripts[Math.min(n, scripts.length - 1)];
     const callIndex = n++;
     calls.push(strategy.label);
-    const handle = {
+    const handle: ProcHandle = {
       pid: 1000 + callIndex,
       kill() { /* no-op */ }
     };
@@ -33,18 +40,14 @@ function fakeFactory(scripts, calls) {
   };
 }
 
-beforeEach(() => {
-  // 依赖真实 probe（样本已缓存，速度可接受）；caps 用真实探测结果（QSV 或 libx264 均可）
-});
-
 test('copy 失败且未吐数据 → 自动降级到下一策略并成功', async () => {
   const s = ensureSamples();
   const session = await createSession(s.h264Aac);   // h264+420p → [copy, hw/sw]
   assert.strictEqual(session.chain[0].label, 'copy');
 
-  const calls = [];
-  const dataChunks = [];
-  let errors = [];
+  const calls: string[] = [];
+  const dataChunks: number[] = [];
+  let errors: Error[] = [];
   let exits = 0;
   const factory = fakeFactory([{ fail: true }, { data: 10 }], calls);
 
@@ -70,8 +73,8 @@ test('copy 失败且未吐数据 → 自动降级到下一策略并成功', asyn
 test('所有策略都失败 → 向调用方报一次错', async () => {
   const s = ensureSamples();
   const session = await createSession(s.h264Aac);
-  const calls = [];
-  let errors = [];
+  const calls: string[] = [];
+  let errors: Error[] = [];
   let exits = 0;
   const factory = fakeFactory([{ fail: true }, { fail: true }], calls);
 
@@ -89,13 +92,13 @@ test('所有策略都失败 → 向调用方报一次错', async () => {
 test('已吐数据后失败 → 不降级（避免污染响应流），直接报错', async () => {
   const s = ensureSamples();
   const session = await createSession(s.h264Aac);
-  const calls = [];
-  let errors = [];
+  const calls: string[] = [];
+  let errors: Error[] = [];
   let dataTotal = 0;
 
   // 脚本：第一次先吐数据（但工厂接口里 data 后立即 exit 0，这里用自定义工厂）
   let n = 0;
-  const factory = ({ strategy, onData, onError }) => {
+  const factory: CreateProc = ({ strategy, onData, onError }) => {
     calls.push(strategy.label);
     const i = n++;
     setImmediate(() => {
@@ -123,8 +126,8 @@ test('不可直通源只有单一策略，失败直接报错', async () => {
   const s = ensureSamples();
   const session = await createSession(s.h264Hi10);  // 10bit → 无 copy
   assert.strictEqual(session.chain.length, 1);
-  const calls = [];
-  let errors = [];
+  const calls: string[] = [];
+  let errors: Error[] = [];
   const factory = fakeFactory([{ fail: true }], calls);
   startStream(session, 0, () => {}, (e) => errors.push(e), () => {}, { createProc: factory });
   await new Promise(r => setImmediate(r));

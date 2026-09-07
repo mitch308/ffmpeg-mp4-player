@@ -22,7 +22,7 @@
   "scripts": {
     "start": "node server.js",
     "build": "vite build && vite build -c vite.config.child.ts && vite build -c vite.config.bin.ts",
-    "test": "node --test \"test/*.test.js\"",
+    "test": "npm run build && vitest run",
     "test:watch": "vitest"
   },
   "engines": {

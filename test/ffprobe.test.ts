@@ -1,8 +1,8 @@
-// test/ffprobe.test.js
-const { test } = require('node:test');
-const assert = require('node:assert');
-const { probe } = require('../lib/ffprobe');
-const { ensureSamples } = require('./helpers/samples');
+// test/ffprobe.test.ts
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { probe } from '../src/lib/ffprobe';
+import { ensureSamples } from './helpers/samples';
 
 test('probe 返回视频基础信息', async () => {
   const s = ensureSamples();

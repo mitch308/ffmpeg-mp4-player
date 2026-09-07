@@ -1,4 +1,4 @@
-// lib/hw-accel.js
+// src/lib/hw-accel.ts
 // 硬件编码能力探测：启动时检测部署机器上真实可用的硬件编码器并缓存。
 //
 // 两步探测：
@@ -8,11 +8,23 @@
 // 环境变量 FFMPEG_HW_ENCODER：
 //  - "none"           强制禁用硬件加速（走 libx264）
 //  - "<encoder 名>"   只测试该编码器，失败仍回退 libx264
-const { spawn } = require('child_process');
-const { getFfmpegPath } = require('./ffmpeg-path');
+import { spawn } from 'child_process';
+import { getFfmpegPath } from './ffmpeg-path';
+
+export interface Caps { encoder: string; mode: 'hybrid' | 'sw'; label: string; }
+
+// EncoderProfile: 硬件/软件编码器的使用方式
+export interface EncoderProfile {
+  mode: 'hybrid' | 'sw';
+  hwaccel: string | null;
+  hwDecodableCodecs: string[];
+  encodeArgs: string[];
+  label: string;
+  decoderByCodec?: Record<string, string>;
+}
 
 // 优先级从高到低（NVIDIA > Intel > AMD > 通用 Linux/Mac 方案）
-const PRIORITY = ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi', 'h264_videotoolbox'];
+export const PRIORITY: string[] = ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi', 'h264_videotoolbox'];
 
 // 每种编码器的使用方式：
 // - mode 'hybrid' 混合管线：-hwaccel 硬解提示（ffmpeg 自动回退软解）+ 硬件编码器，
@@ -22,7 +34,7 @@ const PRIORITY = ['h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi', 'h264_vide
 // - hwDecodableCodecs: 该硬件管线可硬解的源编码（保守列表，配合 pix_fmt 守卫，
 //   见 stream-strategy；硬解不可用时 ffmpeg 自动回退软解，编码不受影响）
 // - encodeArgs:      该编码器的速度优先参数
-const ENCODER_PROFILES = {
+export const ENCODER_PROFILES: Record<string, EncoderProfile> = {
   h264_nvenc: {
     mode: 'hybrid',
     hwaccel: 'cuda',
@@ -78,8 +90,8 @@ const ENCODER_PROFILES = {
 };
 
 /** 从 `ffmpeg -encoders` 输出中提取编码器名集合 */
-function parseEncodersOutput(text) {
-  const names = new Set();
+export function parseEncodersOutput(text: string): Set<string> {
+  const names = new Set<string>();
   for (const line of text.split(/\r?\n/)) {
     const m = line.match(/^\s*[A-Z.]{6}\s+(\S+)\s/);
     if (m) names.add(m[1]);
@@ -88,14 +100,14 @@ function parseEncodersOutput(text) {
 }
 
 /** 按优先级从可用集合中选编码器，无硬件候选时回退 libx264 */
-function pickEncoder(available) {
+export function pickEncoder(available: Set<string>): string {
   for (const enc of PRIORITY) {
     if (available.has(enc)) return enc;
   }
   return 'libx264';
 }
 
-function listCompiledEncoders() {
+function listCompiledEncoders(): Promise<string> {
   return new Promise((resolve) => {
     const proc = spawn(getFfmpegPath(), ['-hide_banner', '-encoders'], { stdio: ['ignore', 'pipe', 'ignore'] });
     let stdout = '';
@@ -106,7 +118,7 @@ function listCompiledEncoders() {
 }
 
 /** 对单个编码器做真实测试编码，验证驱动真实可用 */
-function verifyEncoder(encoder) {
+function verifyEncoder(encoder: string): Promise<boolean> {
   return new Promise((resolve) => {
     const profile = ENCODER_PROFILES[encoder];
     const args = [
@@ -119,7 +131,7 @@ function verifyEncoder(encoder) {
     ];
     const proc = spawn(getFfmpegPath(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let settled = false;
-    const done = (ok) => {
+    const done = (ok: boolean) => {
       if (settled) return;
       settled = true;
       try { proc.kill(); } catch (e) { /* 已退出 */ }
@@ -141,17 +153,17 @@ function verifyEncoder(encoder) {
   });
 }
 
-function capsFor(encoder) {
+function capsFor(encoder: string): Caps {
   const p = ENCODER_PROFILES[encoder] || ENCODER_PROFILES.libx264;
   return { encoder, mode: p.mode, label: p.label };
 }
 
 /** 探测本机最优硬件编码器（不缓存，缓存见 getCaps） */
-async function detectCaps() {
+export async function detectCaps(): Promise<Caps> {
   const forced = process.env.FFMPEG_HW_ENCODER;
   if (forced === 'none') return capsFor('libx264');
 
-  let listed = new Set();
+  let listed: Set<string> = new Set();
   if (!forced) {
     listed = parseEncodersOutput(await listCompiledEncoders());
   }
@@ -164,10 +176,10 @@ async function detectCaps() {
   return capsFor('libx264');
 }
 
-let cached = null;
+let cached: Promise<Caps> | null = null;
 
 /** 获取能力（进程内缓存；检测失败自动回退 libx264，不会 reject） */
-function getCaps() {
+export function getCaps(): Promise<Caps> {
   if (!cached) {
     cached = detectCaps().then((caps) => {
       console.log(`[hw-accel] 使用编码器: ${caps.encoder} (${caps.label}, mode=${caps.mode})`);
@@ -178,16 +190,6 @@ function getCaps() {
 }
 
 /** 供测试/运维强制重新探测 */
-function resetCaps() {
+export function resetCaps(): void {
   cached = null;
 }
-
-module.exports = {
-  PRIORITY,
-  ENCODER_PROFILES,
-  parseEncodersOutput,
-  pickEncoder,
-  detectCaps,
-  getCaps,
-  resetCaps
-};

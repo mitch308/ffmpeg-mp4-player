@@ -1,11 +1,12 @@
-// lib/ffmpeg-process.js
+// src/lib/ffmpeg-process.ts
 // 按播放策略构建 ffmpeg 命令行，输出 fMP4 到 stdout。
-// 策略由 lib/stream-strategy.js 依据源格式与硬件能力决定：
+// 策略由 src/lib/stream-strategy.ts 依据源格式与硬件能力决定：
 //   copy      直通 remux（-c:v copy，零转码开销）
 //   transcode 转码（硬件/软件编码器，可选硬解与 GPU 帧处理）
-const { spawn } = require('child_process');
-const { getFfmpegPath } = require('./ffmpeg-path');
-const { ENCODER_PROFILES } = require('./hw-accel');
+import { spawn } from 'child_process';
+import { getFfmpegPath } from './ffmpeg-path';
+import { ENCODER_PROFILES } from './hw-accel';
+import type { Strategy } from './stream-strategy';
 
 /**
  * 构建 ffmpeg 参数列表（纯函数，供单测）
@@ -15,7 +16,7 @@ const { ENCODER_PROFILES } = require('./hw-accel');
  * @param {object} strategy - stream-strategy 产出的策略对象
  * @returns {string[]}
  */
-function buildArgs(url, startTime, strategy) {
+export function buildArgs(url: string, startTime: number, strategy: Strategy): string[] {
   const inputOpts = ['-v', 'error'];
 
   // 硬解：优先显式解码器（如 hevc_qsv，稳定且快于提示路径），
@@ -27,12 +28,12 @@ function buildArgs(url, startTime, strategy) {
   }
   inputOpts.push('-ss', String(startTime), '-i', url);
 
-  const outputOpts = [];
+  const outputOpts: string[] = [];
 
   if (strategy.video === 'copy') {
     outputOpts.push('-c:v', 'copy', '-avoid_negative_ts', 'make_zero');
   } else {
-    const profile = ENCODER_PROFILES[strategy.encoder] || ENCODER_PROFILES.libx264;
+    const profile = ENCODER_PROFILES[strategy.encoder as string] || ENCODER_PROFILES.libx264;
     if (strategy.encoder === 'libx264') {
       // 质量优先：CRF 自适应码率，与原行为一致
       outputOpts.push(
@@ -48,7 +49,7 @@ function buildArgs(url, startTime, strategy) {
       const kbps = strategy.videoBitrate || 6000;
       const maxrate = Math.round(kbps * 1.5);
       outputOpts.push(
-        '-c:v', strategy.encoder,
+        '-c:v', strategy.encoder!,
         ...profile.encodeArgs,
         '-b:v', `${kbps}k`,
         '-maxrate', `${maxrate}k`,
@@ -95,7 +96,14 @@ function buildArgs(url, startTime, strategy) {
  * @param {(code: number|null) => void} opts.onExit - 进程退出回调
  * @returns {{ pid: number, kill: () => void }}
  */
-function createFfmpegProcess({ url, startTime, strategy, onData, onError, onExit }) {
+export function createFfmpegProcess({ url, startTime, strategy, onData, onError, onExit }: {
+  url: string;
+  startTime: number;
+  strategy: Strategy;
+  onData: (chunk: Buffer) => void;
+  onError: (err: Error) => void;
+  onExit: (code: number | null) => void;
+}): { pid: number; kill(): void } {
   const args = buildArgs(url, startTime, strategy);
 
   const proc = spawn(getFfmpegPath(), args, {
@@ -135,7 +143,7 @@ function createFfmpegProcess({ url, startTime, strategy, onData, onError, onExit
   });
 
   return {
-    pid: proc.pid,
+    pid: proc.pid!,
     kill() {
       killed = true;
       // Windows 上需要强制杀进程树。用异步 spawn 避免同步阻塞事件循环
@@ -159,5 +167,3 @@ function createFfmpegProcess({ url, startTime, strategy, onData, onError, onExit
     }
   };
 }
-
-module.exports = { buildArgs, createFfmpegProcess };

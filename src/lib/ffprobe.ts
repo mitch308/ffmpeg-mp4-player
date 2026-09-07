@@ -1,8 +1,33 @@
-// lib/ffprobe.js
-const { spawn } = require('child_process');
-const { getFfprobePath } = require('./ffmpeg-path');
+// src/lib/ffprobe.ts
+import { spawn } from 'child_process';
+import { getFfprobePath } from './ffmpeg-path';
 
-function probe(url) {
+export interface AudioInfo { codec: string; channels: number; sampleRate: number; }
+export interface ProbeResult {
+  duration: number; width: number; height: number;
+  codec: string; pixFmt: string; profile: string; fps: number;
+  audio: AudioInfo | null;
+}
+
+interface FfprobeStream {
+  codec_type: string;
+  codec_name?: string;
+  pix_fmt?: string;
+  profile?: string;
+  width?: number;
+  height?: number;
+  avg_frame_rate?: string;
+  r_frame_rate?: string;
+  channels?: number;
+  sample_rate?: number;
+}
+
+interface FfprobeOutput {
+  streams: FfprobeStream[];
+  format: { duration: string };
+}
+
+export function probe(url: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
     const ffprobePath = getFfprobePath();
     const args = [
@@ -24,8 +49,8 @@ function probe(url) {
     }, TIMEOUT_MS);
     timer.unref && timer.unref();
 
-    proc.stdout.on('data', (chunk) => { stdout += chunk; });
-    proc.stderr.on('data', (chunk) => { stderr += chunk; });
+    proc.stdout!.on('data', (chunk) => { stdout += chunk; });
+    proc.stderr!.on('data', (chunk) => { stderr += chunk; });
 
     proc.on('close', (code) => {
       clearTimeout(timer);
@@ -33,7 +58,7 @@ function probe(url) {
         return reject(new Error(`ffprobe exited with code ${code}: ${stderr}`));
       }
       try {
-        const data = JSON.parse(stdout);
+        const data = JSON.parse(stdout) as FfprobeOutput;
         const videoStream = data.streams.find(s => s.codec_type === 'video');
         if (!videoStream) {
           return reject(new Error('No video stream found'));
@@ -59,7 +84,7 @@ function probe(url) {
           } : null
         });
       } catch (err) {
-        reject(new Error(`Failed to parse ffprobe output: ${err.message}`));
+        reject(new Error(`Failed to parse ffprobe output: ${(err as Error).message}`));
       }
     });
 
@@ -69,5 +94,3 @@ function probe(url) {
     });
   });
 }
-
-module.exports = { probe };

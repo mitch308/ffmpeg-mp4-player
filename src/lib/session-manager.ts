@@ -1,22 +1,35 @@
-// lib/session-manager.js
-const { createFfmpegProcess } = require('./ffmpeg-process');
-const { probe } = require('./ffprobe');
-const { getCaps } = require('./hw-accel');
-const { strategyChain } = require('./stream-strategy');
+// src/lib/session-manager.ts
+import { createFfmpegProcess } from './ffmpeg-process';
+import { probe } from './ffprobe';
+import { getCaps } from './hw-accel';
+import { strategyChain } from './stream-strategy';
+import type { ProbeResult } from './ffprobe';
+import type { Strategy } from './stream-strategy';
 
 const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟
 
-const sessions = new Map();
+export interface Session {
+  id: string;
+  url: string;
+  probeResult: ProbeResult;
+  chain: Strategy[];
+  chainIndex: number;
+  process: { pid: number; kill(): void } | null;
+  lastActivity: number;
+  timeoutId: NodeJS.Timeout | null;
+}
+
+const sessions = new Map<string, Session>();
 
 /**
  * 创建会话：探测元数据 + 结合硬件能力计算策略链
  * @param {string} url
  * @returns {Promise<{id, url, probeResult, chain, chainIndex}>}
  */
-async function createSession(url) {
+export async function createSession(url: string): Promise<Session> {
   const id = generateId();
   const [probeResult, caps] = await Promise.all([probe(url), getCaps()]);
-  const session = {
+  const session: Session = {
     id,
     url,
     probeResult,
@@ -36,12 +49,12 @@ async function createSession(url) {
  * @param {string} id
  * @returns {object|undefined}
  */
-function getSession(id) {
+export function getSession(id: string): Session | undefined {
   return sessions.get(id);
 }
 
 /** 当前生效的策略 */
-function currentStrategy(session) {
+export function currentStrategy(session: Session): Strategy {
   return session.chain[Math.min(session.chainIndex, session.chain.length - 1)];
 }
 
@@ -57,14 +70,21 @@ function currentStrategy(session) {
  * @param {(code: number|null) => void} onExit
  * @param {{createProc?: Function}} [opts] - 测试注入点
  */
-function startStream(session, startTime, onData, onError, onExit, opts = {}) {
+export function startStream(
+  session: Session,
+  startTime: number,
+  onData: (chunk: Buffer) => void,
+  onError: (err: Error) => void,
+  onExit: (code: number | null) => void,
+  opts: { createProc?: typeof createFfmpegProcess } = {}
+): { pid: number; kill(): void } {
   // 先停止旧进程
   stopStream(session);
 
   const createProc = opts.createProc || createFfmpegProcess;
   const strategy = currentStrategy(session);
   let bytesEmitted = 0;
-  let proc = null;
+  let proc: { pid: number; kill(): void } | null = null;
 
   proc = createProc({
     url: session.url,
@@ -106,7 +126,7 @@ function startStream(session, startTime, onData, onError, onExit, opts = {}) {
  * 停止当前转码流
  * @param {object} session
  */
-function stopStream(session) {
+export function stopStream(session: Session): void {
   if (session.process) {
     session.process.kill();
     session.process = null;
@@ -117,7 +137,7 @@ function stopStream(session) {
  * 销毁会话
  * @param {string} id
  */
-function destroySession(id) {
+export function destroySession(id: string): void {
   const session = sessions.get(id);
   if (!session) return;
   stopStream(session);
@@ -127,11 +147,18 @@ function destroySession(id) {
   sessions.delete(id);
 }
 
+/** 销毁全部会话（stop() 生命周期调用）：杀掉所有 ffmpeg 进程并清空 Map */
+export function destroyAllSessions(): void {
+  for (const id of Array.from(sessions.keys())) {
+    destroySession(id);
+  }
+}
+
 /**
  * 更新会话最后活动时间
  * @param {object} session
  */
-function touchSession(session) {
+export function touchSession(session: Session): void {
   if (!session) return;
   session.lastActivity = Date.now();
   // 重置超时计时器
@@ -145,11 +172,11 @@ function touchSession(session) {
  * 获取会话总数
  * @returns {number}
  */
-function getSessionCount() {
+export function getSessionCount(): number {
   return sessions.size;
 }
 
-function scheduleCleanup(session) {
+function scheduleCleanup(session: Session): void {
   session.timeoutId = setTimeout(() => {
     // 如果 session 正在 streaming（有活跃进程），不清理
     if (session.process) {
@@ -162,22 +189,11 @@ function scheduleCleanup(session) {
   session.timeoutId.unref && session.timeoutId.unref();
 }
 
-function generateId() {
-  let id;
+function generateId(): string {
+  let id: string;
   do {
     id = Math.random().toString(36).substring(2, 10) +
          Date.now().toString(36);
   } while (sessions.has(id)); // 碰撞防御：极小概率撞上现存会话 id 时重新生成
   return id;
 }
-
-module.exports = {
-  createSession,
-  getSession,
-  startStream,
-  stopStream,
-  destroySession,
-  touchSession,
-  getSessionCount,
-  currentStrategy
-};

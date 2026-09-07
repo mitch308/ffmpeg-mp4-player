@@ -1,32 +1,34 @@
-// test/stream-strategy.test.js — 格式自适应决策（纯函数）
-const { test } = require('node:test');
-const assert = require('node:assert');
-const { strategyChain } = require('../lib/stream-strategy');
+// test/stream-strategy.test.ts — 格式自适应决策（纯函数）
+import { test } from 'vitest';
+import assert from 'node:assert/strict';
+import { strategyChain } from '../src/lib/stream-strategy';
+import type { Caps } from '../src/lib/hw-accel';
+import type { ProbeResult } from '../src/lib/ffprobe';
 
-const NVENC = { encoder: 'h264_nvenc', mode: 'hybrid' };
-const QSV = { encoder: 'h264_qsv', mode: 'hybrid' };
-const SW = { encoder: 'libx264', mode: 'sw' };
-const AMF = { encoder: 'h264_amf', mode: 'hybrid' };
+const NVENC: Caps = { encoder: 'h264_nvenc', mode: 'hybrid', label: 'NVIDIA NVENC' };
+const QSV: Caps = { encoder: 'h264_qsv', mode: 'hybrid', label: 'Intel QSV' };
+const SW: Caps = { encoder: 'libx264', mode: 'sw', label: '软件 libx264' };
+const AMF: Caps = { encoder: 'h264_amf', mode: 'hybrid', label: 'AMD AMF' };
 
-const probe = (over) => Object.assign({
+const probe = (over?: Partial<ProbeResult>): ProbeResult => Object.assign({
   codec: 'h264', pixFmt: 'yuv420p', fps: 30,
   audio: { codec: 'aac', channels: 2, sampleRate: 44100 }
-}, over);
+}, over) as ProbeResult;
 
 test('转码策略携带按分辨率估算的目标码率', () => {
   const k4 = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p10le', width: 3840, height: 2160, fps: 30 }), NVENC)[0];
-  assert.ok(k4.videoBitrate >= 20000 && k4.videoBitrate <= 35000, `4K30 videoBitrate=${k4.videoBitrate}kbps`);
+  assert.ok(k4.videoBitrate! >= 20000 && k4.videoBitrate! <= 35000, `4K30 videoBitrate=${k4.videoBitrate}kbps`);
   const fhd = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p10le', width: 1920, height: 1080, fps: 30 }), NVENC)[0];
-  assert.ok(fhd.videoBitrate >= 4000 && fhd.videoBitrate <= 10000, `1080p30 videoBitrate=${fhd.videoBitrate}kbps`);
+  assert.ok(fhd.videoBitrate! >= 4000 && fhd.videoBitrate! <= 10000, `1080p30 videoBitrate=${fhd.videoBitrate}kbps`);
   const hd60 = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p10le', width: 1280, height: 720, fps: 60 }), NVENC)[0];
-  assert.ok(hd60.videoBitrate >= 3000 && hd60.videoBitrate <= 9000, `720p60 videoBitrate=${hd60.videoBitrate}kbps`);
+  assert.ok(hd60.videoBitrate! >= 3000 && hd60.videoBitrate! <= 9000, `720p60 videoBitrate=${hd60.videoBitrate}kbps`);
   const copy = strategyChain(probe(), NVENC)[0];
   assert.strictEqual(copy.videoBitrate, undefined, '直通无码率参数');
 });
 
 test('缺帧率信息时按 30fps 估算', () => {
   const s = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p10le', width: 1920, height: 1080, fps: undefined }), NVENC)[0];
-  assert.ok(s.videoBitrate > 0);
+  assert.ok(s.videoBitrate! > 0);
 });
 
 test('H.264 8bit 源 → 直通优先，硬件转码兜底', () => {
