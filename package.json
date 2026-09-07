@@ -2,7 +2,6 @@
   "name": "ffmpeg-mp4-player",
   "version": "2.0.0",
   "description": "Web video player powered by ffmpeg with MSE streaming (embeddable npm package)",
-  "main": "server.js",
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
@@ -20,7 +19,7 @@
     "README.md"
   ],
   "scripts": {
-    "start": "node server.js",
+    "start": "node dist/bin.cjs",
     "build": "vite build && vite build -c vite.config.child.ts && vite build -c vite.config.bin.ts",
     "test": "npm run build && vitest run",
     "test:watch": "vitest"

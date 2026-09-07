@@ -11,6 +11,8 @@ export default defineConfig({
   build: {
     target: 'node18',
     emptyOutDir: false,
+    // public/ 经 package files 直接发布，拷进 dist/ 只会让包体积翻倍（详见 vite.config.ts）
+    copyPublicDir: false,
     lib: {
       entry: 'src/bin.ts',
       formats: ['cjs'],

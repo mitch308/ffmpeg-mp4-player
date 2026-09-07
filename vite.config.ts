@@ -13,6 +13,8 @@ export default defineConfig({
   define: { 'process.env.NODE_ENV': 'process.env.NODE_ENV' },
   build: {
     target: 'node18',
+    // public/ 不拷进 dist/：package files 同时发布两者，拷贝只会让包体积翻倍
+    copyPublicDir: false,
     lib: {
       entry: { index: 'src/index.ts' },
       formats: ['es', 'cjs'],
