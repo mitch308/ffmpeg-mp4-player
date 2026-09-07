@@ -7,8 +7,13 @@
 import { existsSync, accessSync, constants } from 'fs';
 import { createRequire } from 'module';
 
-// 兼容 ESM/CJS 双格式产物：CJS 构建中 Vite 会垫平 import.meta.url
-const nodeRequire = createRequire(import.meta.url);
+// 兼容 ESM/CJS 双格式产物（裸写 require 会被打包器的互操作 shim 劫持，故统一走 createRequire）：
+// - CJS（dist/index.cjs）：__filename 真实存在，以其为解析基准
+// - ESM（源码 / vitest / dist/index.mjs）：__filename 未定义，以 import.meta.url 为解析基准
+// createRequire 两种基准都接受，裸说明符从产物所在目录向上找 node_modules
+const nodeRequire = createRequire(
+  typeof __filename === 'string' ? __filename : import.meta.url
+);
 
 export interface BinaryOverrides {
   ffmpegPath?: string | null;
@@ -23,8 +28,8 @@ export function configureBinaries(next: BinaryOverrides): void {
   overrides.ffprobePath = next.ffprobePath ?? null;
 }
 
-/** 校验路径存在且可执行（Windows 上 X_OK 恒通过，退化为存在性检查） */
-function isExecutable(p: string): boolean {
+/** 校验路径存在且可执行（Windows 上 X_OK 恒通过，退化为存在性检查）。导出供 startServer 校验显式配置 */
+export function isExecutable(p: string): boolean {
   try {
     if (!existsSync(p)) return false;
     accessSync(p, constants.X_OK);
