@@ -13,10 +13,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import type { ProbeResult } from '../src/lib/ffprobe';
 
-test('HEVC 8bit → 硬解提示 + 硬件编码，产物 8bit H.264', async () => {
+test('HEVC 8bit → 硬解提示 + 硬件编码，产物 8bit H.264', async (ctx) => {
   const caps = await getCaps();
   if (caps.mode === 'sw') {
-    return test.skip('本机无硬件编码器（libx264），跳过');
+    ctx.skip('本机无硬件编码器（libx264），跳过');
   }
   const profile = ENCODER_PROFILES[caps.encoder];
 
@@ -53,10 +53,10 @@ test('HEVC 8bit → 硬解提示 + 硬件编码，产物 8bit H.264', async () =
   assert.strictEqual(v.pix_fmt, 'yuv420p');
 });
 
-test('HEVC 10bit → 软解 + 硬件编码，产物 8bit H.264', async () => {
+test('HEVC 10bit → 软解 + 硬件编码，产物 8bit H.264', async (ctx) => {
   const caps = await getCaps();
   if (caps.mode === 'sw') {
-    return test.skip(`本机无硬件编码器（libx264），跳过`);
+    ctx.skip('本机无硬件编码器（libx264），跳过');
   }
   const profile = ENCODER_PROFILES[caps.encoder];
 
