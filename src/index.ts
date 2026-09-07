@@ -1,15 +1,33 @@
 // src/index.ts — npm 包公共 API
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
+import type { ChildProcess } from 'child_process';
+import { fork } from 'child_process';
+import { existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
 import { destroyAllSessions } from './lib/session-manager';
 import { pickFreePort } from './lib/ports';
+import { killProcessTree } from './lib/kill-tree';
 import { createApp } from './server';
 import { PlayerServer, PlayerServerOptions, DEFAULT_HOST } from './config';
 
 export type { PlayerServer, PlayerServerOptions } from './config';
 
 const MAX_PORT_RETRIES = 5;
+
+// 与 child.cjs 同目录：dist 产物下即包内 dist/child.cjs；
+// 源码模式（vitest 跑 src/index.ts）无 dist 兄弟文件，退到源码树旁的 dist/
+// CJS 产物中 esbuild 把 import.meta 垫成空对象（import.meta.url → undefined），退回 __filename
+function resolveChildEntry(): string {
+  const here = path.dirname(
+    typeof __filename === 'string' ? __filename : fileURLToPath(import.meta.url)
+  );
+  const sibling = path.join(here, 'child.cjs');
+  if (existsSync(sibling)) return sibling;
+  return path.join(here, '../dist/child.cjs');
+}
 
 function listen(app: ReturnType<typeof createApp>, port: number, host: string): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -58,10 +76,48 @@ export async function startInProcess(options: PlayerServerOptions): Promise<Play
   throw lastErr;
 }
 
-/** 子进程模式：Task 4 实现（本任务先留占位实现，直接抛错） */
+/** 子进程模式：fork dist/child.cjs，IPC 回报端口；stop() 杀进程树 */
 async function startChildProcess(options: PlayerServerOptions): Promise<PlayerServer> {
-  void options;
-  throw new Error('childProcess 模式将在 Task 4 实现');
+  const childEntry = resolveChildEntry();
+  if (!existsSync(childEntry)) {
+    throw new Error(`未找到 ${childEntry}，请先执行 npm run build`);
+  }
+
+  const child: ChildProcess = fork(childEntry, [], {
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    detached: true, // POSIX 上使子进程成为组长，便于 kill(-pid) 杀全组
+    env: {
+      ...process.env,
+      FFMPEG_PLAYER_CHILD_OPTIONS: JSON.stringify(options)
+    }
+  });
+
+  try {
+    const port = await new Promise<number>((resolve, reject) => {
+      const onMessage = (msg: unknown) => {
+        const m = msg as { type?: string; port?: number; message?: string };
+        if (m?.type === 'ready' && typeof m.port === 'number') resolve(m.port);
+        else if (m?.type === 'error') reject(new Error(m.message ?? '子进程启动失败'));
+      };
+      child.on('message', onMessage);
+      child.once('exit', (code) =>
+        reject(new Error(`子进程在就绪前退出（退出码 ${code}）`))
+      );
+    });
+    const host = options.host ?? DEFAULT_HOST;
+    console.log(`ffmpeg-mp4-player（子进程模式）运行于 http://${host}:${port}`);
+    return {
+      port,
+      url: `http://${host}:${port}`,
+      stop: async () => {
+        if (child.pid != null) await killProcessTree(child.pid);
+      }
+    };
+  } catch (err) {
+    // 启动失败兜底清理，不留半启动子进程
+    if (child.pid != null) await killProcessTree(child.pid);
+    throw err;
+  }
 }
 
 /**
