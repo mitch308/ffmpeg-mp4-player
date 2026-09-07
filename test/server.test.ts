@@ -2,9 +2,13 @@
 import { describe, test, expect, afterEach } from 'vitest';
 import { startServer } from '../src/index';
 import { getSessionCount } from '../src/lib/session-manager';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import path from 'path';
+import http from 'http';
+import { execFileSync } from 'child_process';
 import { ensureSamples } from './helpers/samples';
+import { getFfmpegPath } from '../src/lib/ffmpeg-path';
 
 let server: Awaited<ReturnType<typeof startServer>> | null = null;
 afterEach(async () => { if (server) { await server.stop(); server = null; } });
@@ -43,5 +47,62 @@ describe('startServer 本进程模式', () => {
     await expect(startServer({ ffmpegPath: 'C:/不存在的ffmpeg.exe' }))
       .rejects.toThrow(/ffmpeg/);
     expect(getSessionCount()).toBe(0);
+  });
+
+  test('stop() 在存在活跃流会话时也能返回（先销毁会话再关闭监听）', async () => {
+    // 源必须永不 EOF，否则 ffmpeg 播完自然退出、流关闭、无法复现死锁：
+    // 把 1 秒样本 remux 成 faststart mp4，经一个"读到底也不 end 响应"的
+    // 阻塞 HTTP 服务提供，ffmpeg 读完文件后会一直阻塞在读取上
+    const samples = ensureSamples();
+    const dir = mkdtempSync(path.join(tmpdir(), 'ffmpeg-player-stall-'));
+    const faststartPath = path.join(dir, 'faststart.mp4');
+    execFileSync(getFfmpegPath(), [
+      '-v', 'error',
+      '-i', samples.h264Aac,
+      '-c', 'copy', '-movflags', '+faststart',
+      '-y', faststartPath
+    ], { stdio: 'pipe' });
+    const fileBytes = readFileSync(faststartPath);
+
+    const stallServer = http.createServer((_req, res) => {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.write(fileBytes); // 刻意不 end()：chunked 响应保持打开，ffmpeg 读阻塞
+    });
+    await new Promise<void>((resolve) => stallServer.listen(0, '127.0.0.1', resolve));
+    const stallUrl = `http://127.0.0.1:${(stallServer.address() as import('net').AddressInfo).port}/video.mp4`;
+
+    const player = await startServer({ port: 0 });
+    let stream: Response | null = null;
+    try {
+      const create = await fetch(`${player.url}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: stallUrl })
+      });
+      expect(create.ok).toBe(true);
+      const { sessionId } = (await create.json()) as { sessionId: string };
+
+      // 流响应头到达即说明 ffmpeg 已写出 init segment、会话处于活跃流状态
+      stream = await fetch(`${player.url}/api/sessions/${sessionId}/stream`);
+      expect(stream.ok).toBe(true);
+      await new Promise((r) => setTimeout(r, 300)); // 等待流稳定建立
+
+      // stop() 必须能在 3 秒内返回；旧实现会因 close 回调永不触发而超时
+      const stopPromise = player.stop().catch(() => {});
+      let timedOut = false;
+      await Promise.race([
+        stopPromise,
+        new Promise((_, reject) => setTimeout(() => { timedOut = true; reject(new Error('stop() 3 秒未返回（死锁）')); }, 3000))
+      ]);
+      expect(timedOut).toBe(false);
+    } finally {
+      await stream?.body?.cancel().catch(() => {});
+      await Promise.race([
+        player.stop().catch(() => {}),
+        new Promise((r) => setTimeout(r, 5000))
+      ]);
+      stallServer.close();
+      stallServer.closeAllConnections?.();
+    }
   });
 });

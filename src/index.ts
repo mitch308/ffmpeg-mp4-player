@@ -37,7 +37,12 @@ function listen(app: ReturnType<typeof createApp>, port: number, host: string): 
 }
 
 function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve) => server.close(() => resolve()));
+  return new Promise((resolve) => {
+    server.close(() => resolve());
+    // 空闲 keep-alive 与被未消费响应钉住的 socket 会无限期拖延 close 回调，
+    // 必须主动断开剩余连接，否则 close() 永不完成
+    server.closeAllConnections?.();
+  });
 }
 
 /** 本进程模式：同进程内起 express，返回端口与 stop()（child.ts 与 startServer 共用） */
@@ -63,8 +68,12 @@ export async function startInProcess(options: PlayerServerOptions): Promise<Play
         port: boundPort,
         url: `http://${host}:${boundPort}`,
         stop: async () => {
-          await closeServer(server);
+          // 先销毁会话再关闭监听：活跃流会话的 HTTP 响应会钉住连接，
+          // 而 closeServer 要等所有连接结束；destroyAllSessions 又只在
+          // stop() 里被调用——两者互相等待，先关监听必死锁。必须先杀
+          // ffmpeg（销毁会话断开响应），closeServer 才能等到连接归零
           destroyAllSessions();
+          await closeServer(server);
         }
       };
     } catch (err) {
@@ -92,6 +101,13 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
     }
   });
 
+  const killChildIfAlive = async (): Promise<void> => {
+    // 子进程可能在就绪后自行退出（IPC 断开即退出）；此时 pid 可能已被系统回收复用，
+    // 无条件强杀会误杀无关进程。exitCode/signalCode 双检覆盖正常退出与被信号终止两种形态。
+    if (child.pid == null || child.exitCode != null || child.signalCode != null) return;
+    await killProcessTree(child.pid);
+  };
+
   try {
     const port = await new Promise<number>((resolve, reject) => {
       const onMessage = (msg: unknown) => {
@@ -110,12 +126,12 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
       port,
       url: `http://${host}:${port}`,
       stop: async () => {
-        if (child.pid != null) await killProcessTree(child.pid);
+        await killChildIfAlive();
       }
     };
   } catch (err) {
     // 启动失败兜底清理，不留半启动子进程
-    if (child.pid != null) await killProcessTree(child.pid);
+    await killChildIfAlive();
     throw err;
   }
 }

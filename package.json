@@ -2,6 +2,7 @@
   "name": "ffmpeg-mp4-player",
   "version": "2.0.0",
   "description": "Web video player powered by ffmpeg with MSE streaming (embeddable npm package)",
+  "license": "MIT",
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
