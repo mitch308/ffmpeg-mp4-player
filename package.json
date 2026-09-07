@@ -1,13 +1,45 @@
 {
-  "name": "ffmpeg-player",
-  "version": "1.0.0",
-  "description": "Web video player powered by ffmpeg with MSE streaming",
+  "name": "ffmpeg-mp4-player",
+  "version": "2.0.0",
+  "description": "Web video player powered by ffmpeg with MSE streaming (embeddable npm package)",
   "main": "server.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "ffmpeg-mp4-player": "./dist/bin.cjs"
+  },
+  "files": [
+    "dist",
+    "public",
+    "README.md"
+  ],
   "scripts": {
     "start": "node server.js",
-    "test": "node --test \"test/*.test.js\""
+    "build": "vite build && vite build -c vite.config.child.ts && vite build -c vite.config.bin.ts",
+    "test": "node --test \"test/*.test.js\"",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
+    "@typescript/typescript6": "^6.0.2",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-dts": "^5.1.0",
+    "vitest": "^5.0.0"
   }
 }
