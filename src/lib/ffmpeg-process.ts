@@ -6,6 +6,7 @@
 import { spawn } from 'child_process';
 import { getFfmpegPath } from './ffmpeg-path';
 import { ENCODER_PROFILES } from './hw-accel';
+import { normalizeLocalhostUrl } from './url';
 import type { Strategy } from './stream-strategy';
 
 /**
@@ -26,7 +27,8 @@ export function buildArgs(url: string, startTime: number, strategy: Strategy): s
   } else if (strategy.hwDecode) {
     inputOpts.push('-hwaccel', strategy.hwDecode);
   }
-  inputOpts.push('-ss', String(startTime), '-i', url);
+  // localhost 在 Windows 上解析为 ::1，IPv4-only 服务会连接挂死，重写为 127.0.0.1
+  inputOpts.push('-ss', String(startTime), '-i', normalizeLocalhostUrl(url));
 
   const outputOpts: string[] = [];
 

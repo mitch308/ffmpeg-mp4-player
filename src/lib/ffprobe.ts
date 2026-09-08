@@ -1,6 +1,7 @@
 // src/lib/ffprobe.ts
 import { spawn } from 'child_process';
 import { getFfprobePath } from './ffmpeg-path';
+import { normalizeLocalhostUrl } from './url';
 
 export interface AudioInfo { codec: string; channels: number; sampleRate: number; }
 export interface ProbeResult {
@@ -35,7 +36,8 @@ export function probe(url: string): Promise<ProbeResult> {
       '-print_format', 'json',
       '-show_format',
       '-show_streams',
-      url
+      // localhost 在 Windows 上解析为 ::1，IPv4-only 服务会连接挂死，重写为 127.0.0.1
+      normalizeLocalhostUrl(url)
     ];
 
     const proc = spawn(ffprobePath, args);
