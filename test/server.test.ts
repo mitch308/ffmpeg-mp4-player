@@ -105,4 +105,65 @@ describe('startServer 本进程模式', () => {
       stallServer.closeAllConnections?.();
     }
   });
+
+  test('POST /api/sessions 响应含画质档列表与硬编可用性', async () => {
+    server = await startServer({ port: 0 });
+    const samples = ensureSamples();
+    const res = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    expect(res.ok).toBe(true);
+    const body = await res.json();
+    expect(Array.isArray(body.qualities)).toBe(true);
+    expect(body.qualities).toContain('origin');
+    expect(typeof body.hwAvailable).toBe('boolean');
+    expect(body.requestedQuality).toBe('origin');
+    expect(body.requestedMode).toBe('auto');
+  });
+
+  test('POST 非法 quality/mode → 400', async () => {
+    server = await startServer({ port: 0 });
+    const samples = ensureSamples();
+    for (const body of [
+      { url: samples.h264Aac, quality: '4k' },
+      { url: samples.h264Aac, mode: 'gpu' }
+    ]) {
+      const res = await fetch(`${server.url}/api/sessions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test('画质档不可用（低清源选高画质）→ 400 且会话不留存', async () => {
+    server = await startServer({ port: 0 });
+    const samples = ensureSamples(); // 320x240 样本
+    const res = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac, quality: '1080p' })
+    });
+    expect(res.status).toBe(400);
+    expect(getSessionCount()).toBe(0);
+  });
+
+  test('GET /stream 非法 quality/mode 参数 → 400', async () => {
+    server = await startServer({ port: 0 });
+    const samples = ensureSamples();
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    const { sessionId } = await create.json();
+    const res = await fetch(`${server.url}/api/sessions/${sessionId}/stream?start=0&quality=4k`);
+    expect(res.status).toBe(400);
+  });
+
+  test('静态服务覆盖 public/（demo 页）', async () => {
+    server = await startServer({ port: 0 });
+    const demo = await fetch(`${server.url}/index.html`);
+    expect(demo.ok).toBe(true);
+    // dist/client/ 的播放器页（player.html）断言在 Task 6 构建链建立后补充
+  });
 });
