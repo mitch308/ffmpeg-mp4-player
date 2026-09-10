@@ -45,26 +45,46 @@
 
 ## 3. iframe 播放器页设计
 
-### 3.1 文件结构（public/，保持无构建原生 JS）
+### 3.1 前端源码结构与构建（TypeScript + Vite）
+
+前端从无构建原生 JS 改为 **TypeScript 源码 + Vite 构建**：
 
 ```
-public/
-  index.html      → demo 页：URL 输入 + iframe 嵌入展示 + 嵌入代码片段
-  player.html     → iframe 播放器页（新）
-  player.css      → 播放器全部样式（PC/TV 双主题经根元素 class 切换）
-  player.js       → MSE 核心管线（自现 player.js 演进：保留水位线/自动恢复/
-                     seek 重建/QuotaExceeded 处理，增加 quality/mode 请求参数）
-  player-ui.js    → 控制栏 UI（新）：双主题渲染、控制栏显隐、进度条拖拽、
-                     音量、倍速/画质/比例/解码 ext 面板、键盘、全屏
-  icons/*.svg     → 复制的图标（静态文件，<img> 引用会丢 currentColor，
-                     改为启动时 fetch 后以 inline SVG 注入 DOM）
+src/client/                → 前端 TS 源码
+  player-entry.ts          → 播放器页入口（读 URL 参数、装配 UI + MSE 核心）
+  player-core.ts           → MSE 核心管线（自现 public/player.js 演进：保留
+                             水位线/自动恢复/seek 重建/QuotaExceeded 处理，
+                             增加 quality/mode 请求参数；暴露 play/pause/seek/
+                             setVolume/setQuality/setMode/setRate 接口与状态回调）
+  player-ui.ts             → 控制栏 UI：双主题渲染、控制栏显隐、进度条拖拽、
+                             音量、倍速/画质/比例/解码 ext 面板、键盘、全屏
+  player.html / player.css → 播放器页模板与样式（PC/TV 双主题经根元素 class 切换）
+  icons/*.svg              → 复制的图标（静态文件，<img> 引用会丢 currentColor，
+                             改为启动时 fetch 后以 inline SVG 注入 DOM）
+
+public/                    → demo 页（无构建，保持原生）
+  index.html / style.css   → demo 页：URL 输入 + iframe 嵌入展示 + 嵌入代码片段
 ```
 
-`player.js` 与 `player-ui.js` 通过一个模块级全局对象（如 `window.PlayerUI`）协作：UI 层只读播放状态（currentTime/duration/paused/volume/buffered）并调用动作（play/pause/seek/setVolume/setQuality/setMode/setRate），MSE 层暴露这些接口并回调状态变化。不引入构建步骤，与现有发布方式（package `files` 直接发布 `public/`）一致。
+构建（Vite 多入口，产出进 `dist/client/`）：
+
+- 新增 `vite.config.client.ts`：`root: 'src/client'`，rollupOptions.input 为
+  `player.html`；`build.outDir: '../../dist/client'`；静态资源（css 由 html link、
+  icons）随构建拷贝。
+- `package.json` 的 `build` 脚本追加 `vite build -c vite.config.client.ts`；
+  `files` 数组把 `public` 换成 `dist/client`（public 只剩 demo 页，仍保留发布）。
+- `.gitignore` 补 `dist/` 已有，无需改。
+- server.ts 的静态目录逻辑不变（`public/`）；**demo 页与 server 部署在同源时，
+  `/player.html` 不可用**——需要新增静态路由把 `/player.html`、`/player.css`、
+  `/player.js`、`/icons/*` 同时映射到 `dist/client/`（express.static 多目录 fallback，
+  顺序 public → dist/client），这样单进程部署时 demo 页 iframe 直接可用。
+- TS 配置沿用根 tsconfig（DOM lib 需确认，前端入口单独 tsconfig 若必要）。
 
 ### 3.2 URL 参数约定
 
 `GET /player.html?url=<encoded>&title=&ui=pc|tv&quality=auto|720p|1080p|2k|origin&mode=auto|hw|sw&autoplay=0|1`
+
+注：`/player.html` 由 server 从 `dist/client/` 静态服务（见 3.1 构建一节）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
@@ -157,9 +177,9 @@ Strategy 类型新增字段：`scale?: { width: number; height: number } | null`
 - 新增 `test/quality.test.ts`：档位过滤（各源高度边界）、尺寸计算（比例保持 + 偶数对齐）、码率表。
 - `test/stream-strategy.test.ts`：opts 组合——sw 跳过 copy、hw 链含 libx264 兜底、阶梯码率、scale 字段、auto/origin 与现行为一致（回归）。
 - `test/ffmpeg-process.test.ts`：buildArgs 断言 `-vf scale=W:H`、阶梯码率下 libx264 用 `-b:v` 而非 `-crf`。
-- `test/server.test.ts`：POST 响应含 qualities/hwAvailable；非法 quality/mode 400；stream 非法参数 400；参数持久化。
+- `test/server.test.ts`：POST 响应含 qualities/hwAvailable；非法 quality/mode 400；stream 非法参数 400；参数持久化；`/player.html` 可访问。
 - `test/e2e.test.ts`：真实 ffmpeg 拉 `quality=720p` 流，ffprobe 验证输出高度 720、码率量级正确；`mode=sw` 输出 libx264。
-- 前端手工验证清单（写入 README）：PC/TV 两主题、控制栏显隐各场景、倍速/画质/比例/解码切换、静音自动播放、iframe 嵌入示例页。
+- 前端为构建产物（dist/client），不单独跑前端单测；交互靠手工验证清单（写入 README）：PC/TV 两主题、控制栏显隐各场景、倍速/画质/比例/解码切换、静音自动播放、iframe 嵌入示例页。
 
 ## 7. 风险与开放问题
 
@@ -173,8 +193,9 @@ Strategy 类型新增字段：`scale?: { width: number; height: number } | null`
 
 ## 8. 不做的事
 
-- 不引入前端构建步骤（保持原生 JS）。
-- 不做 postMessage 双向控制接口（用户选基础参数集）。
+- 前端不做 postMessage 双向控制接口（用户选基础参数集）。
+- 前端不引入运行时框架（Vue/React）；纯 TS + DOM。
+- 前端不独立起 dev server；构建产物为静态文件。
 - 不做多码率自适应（HLS/DASH）；画质为手动选择。
 - 不改变输出不变式：视频恒 H.264、音频恒 AAC（或无）。
 - 不移植参考组件的"解码设置=纯摆设"行为，而是落实为真功能。
