@@ -38,7 +38,7 @@
 
 ## 测试
 
-vitest 运行 `test/*.test.ts`（`npm test` 先自动构建再跑）；样本生成与 e2e 均拉**真实的 ffmpeg**（来自 ffmpeg-static）。e2e 测试会启动真实 server（端口 4123）。`hw-accel.detect.test.ts` 和 `hw-pipeline.test.ts` 依赖本机 GPU/驱动——那里的硬件相关失败可能是环境问题，而非代码 bug。
+vitest 运行 `test/*.test.ts`（`npm test` 先自动构建再跑）；样本生成与 e2e 均拉**真实的 ffmpeg**（来自 ffmpeg-static）。e2e 测试会启动真实 server（`port: 0`，随机空闲端口）。`hw-accel.detect.test.ts` 和 `hw-pipeline.test.ts` 依赖本机 GPU/驱动——那里的硬件相关失败可能是环境问题，而非代码 bug。
 
 ## 约定
 

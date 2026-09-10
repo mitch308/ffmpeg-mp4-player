@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> 历史注记：v1.x 实现计划，已被 2026-09-07 npm 包改造取代（见 `2026-09-07-npm-package-refactor.md`）。文中涉及的 `ffmpeg/`、`ffprobe/` 内置二进制已在 v2.0 移除并从 git 全部历史中清除。
+
 **Goal:** 构建一个 Web 视频播放器，支持用户输入视频 URL，通过 Node.js 调用 ffmpeg 转码为 fMP4 流，使用 MSE 在浏览器播放，支持精确 seek 和多会话。
 
 **Architecture:** Express 后端管理多个播放会话，每个会话对应一个独立的 ffmpeg 转码进程。前端通过 MediaSource Extensions 接收 fMP4 分片并播放。Seek 时 kill 旧进程、用 `-ss` 重新定位后启动新进程。
