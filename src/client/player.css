@@ -1,0 +1,14 @@
+/* src/client/player.css — 播放器样式（Task 9/10 分主题补全；当前仅外壳） */
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+.video-player {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}

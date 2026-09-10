@@ -21,7 +21,8 @@
   ],
   "scripts": {
     "start": "node dist/bin.cjs",
-    "build": "vite build && vite build -c vite.config.child.ts && vite build -c vite.config.bin.ts",
+    "build": "vite build && vite build -c vite.config.child.ts && vite build -c vite.config.bin.ts && vite build -c vite.config.client.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
     "test": "npm run build && vitest run",
     "test:watch": "vitest"
   },

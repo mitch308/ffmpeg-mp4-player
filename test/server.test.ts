@@ -115,7 +115,7 @@ describe('startServer 本进程模式', () => {
       body: JSON.stringify({ url: samples.h264Aac })
     });
     expect(res.ok).toBe(true);
-    const body = await res.json();
+    const body = (await res.json()) as Record<string, unknown>;
     expect(Array.isArray(body.qualities)).toBe(true);
     expect(body.qualities).toContain('origin');
     expect(typeof body.hwAvailable).toBe('boolean');
@@ -155,7 +155,7 @@ describe('startServer 本进程模式', () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: samples.h264Aac })
     });
-    const { sessionId } = await create.json();
+    const { sessionId } = (await create.json()) as { sessionId: string };
     const res = await fetch(`${server.url}/api/sessions/${sessionId}/stream?start=0&quality=4k`);
     expect(res.status).toBe(400);
   });
@@ -164,6 +164,13 @@ describe('startServer 本进程模式', () => {
     server = await startServer({ port: 0 });
     const demo = await fetch(`${server.url}/index.html`);
     expect(demo.ok).toBe(true);
-    // dist/client/ 的播放器页（player.html）断言在 Task 6 构建链建立后补充
+  });
+
+  test('dist/client/ 静态服务可访问 player.html（前端构建产物）', async () => {
+    server = await startServer({ port: 0 });
+    // 依赖本任务建立的构建链产出 dist/client/player.html
+    const player = await fetch(`${server.url}/player.html`);
+    expect(player.ok).toBe(true);
+    expect(await player.text()).toContain('player-entry');
   });
 });
