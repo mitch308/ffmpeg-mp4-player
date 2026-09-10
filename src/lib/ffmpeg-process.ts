@@ -36,8 +36,11 @@ export function buildArgs(url: string, startTime: number, strategy: Strategy): s
     outputOpts.push('-c:v', 'copy', '-avoid_negative_ts', 'make_zero');
   } else {
     const profile = ENCODER_PROFILES[strategy.encoder as string] || ENCODER_PROFILES.libx264;
-    if (strategy.encoder === 'libx264') {
-      // 质量优先：CRF 自适应码率，与原行为一致
+    // 阶梯画质（带 scale）→ 固定码率模式，libx264 也不例外（画质档=明确码率契约）；
+    // origin 软转码保持 CRF 23 质量优先（与原行为一致）
+    const kbps = strategy.videoBitrate || 6000;
+    const maxrate = Math.round(kbps * 1.5);
+    if (strategy.encoder === 'libx264' && !strategy.scale) {
       outputOpts.push(
         '-c:v', strategy.encoder,
         ...profile.encodeArgs,
@@ -48,8 +51,6 @@ export function buildArgs(url: string, startTime: number, strategy: Strategy): s
     } else {
       // 硬件编码器不会自动做质量自适应，必须显式指定码率控制，
       // 否则 qsv 等默认极低码率目标导致高分辨率发糊
-      const kbps = strategy.videoBitrate || 6000;
-      const maxrate = Math.round(kbps * 1.5);
       outputOpts.push(
         '-c:v', strategy.encoder!,
         ...profile.encodeArgs,
@@ -58,6 +59,10 @@ export function buildArgs(url: string, startTime: number, strategy: Strategy): s
         '-bufsize', `${maxrate * 2}k`,
         '-force_key_frames', 'expr:eq(n,0)'
       );
+    }
+    // 画质档缩放：vf 值由 stream-strategy 组装（含厂商滤镜选择）
+    if (strategy.scale) {
+      outputOpts.push('-vf', strategy.scale.vf);
     }
   }
 

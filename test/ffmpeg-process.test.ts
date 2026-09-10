@@ -143,3 +143,40 @@ test('AAC 转码环绕声源：aformat 强制标准布局；立体声/拷贝路�
   assert.strictEqual(idx(buildArgs('u', 0, copyStrat), '-af'), -1);
   assert.strictEqual(idx(buildArgs('u', 0, swStrat), '-af'), -1);
 });
+
+// ===== 画质档：缩放滤镜与 libx264 固定码率 =====
+
+const swLadder: Strategy = {
+  label: 'sw', video: 'transcode', encoder: 'libx264', hwDecode: null,
+  audio: 'none', videoBitrate: 2500, scale: { width: 1280, height: 720, vf: 'scale=1280:720' }
+};
+const qsvLadder: Strategy = {
+  label: 'hw', video: 'transcode', encoder: 'h264_qsv', hwDecode: 'qsv', decoder: 'hevc_qsv',
+  audio: 'aac', videoBitrate: 5000, scale: { width: 1920, height: 1080, vf: 'scale_qsv=1920:1080' }
+};
+
+test('阶梯画质（libx264）：固定码率模式，不用 CRF', () => {
+  const a = buildArgs('u', 0, swLadder);
+  assert.ok(idx(a, '-b:v') !== -1 && a[idx(a, '-b:v') + 1] === '2500k', JSON.stringify(a));
+  assert.ok(idx(a, '-maxrate') !== -1 && parseInt(a[idx(a, '-maxrate') + 1]) > 2500);
+  assert.strictEqual(idx(a, '-crf'), -1, '阶梯码率下 libx264 不用 CRF');
+});
+
+test('阶梯画质：-vf 滤镜按策略 vf 值输出', () => {
+  assert.ok(buildArgs('u', 0, swLadder).includes('scale=1280:720'));
+  const a = buildArgs('u', 0, qsvLadder);
+  assert.ok(a.includes('scale_qsv=1920:1080'), 'QSV 显式解码帧在 GPU，须用 scale_qsv');
+  // -vf 与 -af 可共存（音频声道布局滤镜独立）
+  const i = idx(a, '-vf');
+  assert.ok(i !== -1 && a[i + 1] === 'scale_qsv=1920:1080');
+});
+
+test('origin 转码（无 scale）：libx264 保持 CRF、无 -vf（回归）', () => {
+  const a = buildArgs('u', 0, swStrat);
+  assert.ok(idx(a, '-crf') !== -1);
+  assert.strictEqual(idx(a, '-vf'), -1);
+});
+
+test('直通路径无 -vf（回归）', () => {
+  assert.strictEqual(idx(buildArgs('u', 0, copyStrat), '-vf'), -1);
+});
