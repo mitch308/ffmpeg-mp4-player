@@ -3,6 +3,8 @@ import { createFfmpegProcess } from './ffmpeg-process';
 import { probe } from './ffprobe';
 import { getCaps } from './hw-accel';
 import { strategyChain } from './stream-strategy';
+import type { Caps } from './hw-accel';
+import { type QualityId, type TranscodeMode } from './quality';
 import type { ProbeResult } from './ffprobe';
 import type { Strategy } from './stream-strategy';
 
@@ -12,6 +14,9 @@ export interface Session {
   id: string;
   url: string;
   probeResult: ProbeResult;
+  caps: Caps;                                   // 会话创建时的硬件能力快照（重算链用，避免 startStream 异步化）
+  requestedQuality: QualityId;                  // 当前画质档（流请求参数持久化于此）
+  requestedMode: TranscodeMode;                 // 当前解码模式
   chain: Strategy[];
   chainIndex: number;
   process: { pid: number; kill(): void } | null;
@@ -22,18 +27,27 @@ export interface Session {
 const sessions = new Map<string, Session>();
 
 /**
- * 创建会话：探测元数据 + 结合硬件能力计算策略链
+ * 创建会话：探测元数据 + 结合硬件能力与播放参数计算策略链
  * @param {string} url
- * @returns {Promise<{id, url, probeResult, chain, chainIndex}>}
+ * @param {{quality?: QualityId, mode?: TranscodeMode}} [opts] - 画质档/解码模式（缺省 origin/auto = 旧行为）
+ * @returns {Promise<Session>}
  */
-export async function createSession(url: string): Promise<Session> {
+export async function createSession(
+  url: string,
+  opts: { quality?: QualityId; mode?: TranscodeMode } = {}
+): Promise<Session> {
   const id = generateId();
   const [probeResult, caps] = await Promise.all([probe(url), getCaps()]);
+  const requestedQuality = opts.quality ?? 'origin';
+  const requestedMode = opts.mode ?? 'auto';
   const session: Session = {
     id,
     url,
     probeResult,
-    chain: strategyChain(probeResult, caps),
+    caps,
+    requestedQuality,
+    requestedMode,
+    chain: strategyChain(probeResult, caps, { quality: requestedQuality, mode: requestedMode }),
     chainIndex: 0,
     process: null,
     lastActivity: Date.now(),
@@ -68,7 +82,7 @@ export function currentStrategy(session: Session): Strategy {
  * @param {(chunk: Buffer) => void} onData
  * @param {(err: Error) => void} onError
  * @param {(code: number|null) => void} onExit
- * @param {{createProc?: Function}} [opts] - 测试注入点
+ * @param {{createProc?: Function, quality?: QualityId, mode?: TranscodeMode}} [opts] - 测试注入点与画质档/解码模式（缺省沿用会话当前设置）
  */
 export function startStream(
   session: Session,
@@ -76,8 +90,20 @@ export function startStream(
   onData: (chunk: Buffer) => void,
   onError: (err: Error) => void,
   onExit: (code: number | null) => void,
-  opts: { createProc?: typeof createFfmpegProcess } = {}
+  opts: { createProc?: typeof createFfmpegProcess; quality?: QualityId; mode?: TranscodeMode } = {}
 ): { pid: number; kill(): void } {
+  // 流请求显式携带 quality/mode（画质/解码切换、断线恢复重连）→ 更新会话设置并重算策略链；
+  // 仅在变更时重算，普通 seek 沿用现有链与降级进度。断线自动恢复重连不带参数，
+  // 依赖这里持久化的设置，不会静默跳回原画质
+  const quality = opts.quality ?? session.requestedQuality;
+  const mode = opts.mode ?? session.requestedMode;
+  if (quality !== session.requestedQuality || mode !== session.requestedMode) {
+    session.requestedQuality = quality;
+    session.requestedMode = mode;
+    session.chain = strategyChain(session.probeResult, session.caps, { quality, mode });
+    session.chainIndex = 0;
+  }
+
   // 先停止旧进程
   stopStream(session);
 

@@ -136,3 +136,43 @@ test('不可直通源只有单一策略，失败直接报错', async () => {
   assert.strictEqual(errors.length, 1);
   destroySession(session.id);
 });
+
+// ===== 画质档/解码模式：会话参数与策略链重算 =====
+
+test('createSession 携带 quality/mode：链按参数计算', async () => {
+  const s = ensureSamples();
+  const session = await createSession(s.h264Aac, { quality: '720p', mode: 'sw' });
+  assert.strictEqual(session.requestedQuality, '720p');
+  assert.strictEqual(session.requestedMode, 'sw');
+  assert.strictEqual(session.chain.length, 1, '显式参数跳过直通');
+  assert.strictEqual(session.chain[0].encoder, 'libx264');
+  destroySession(session.id);
+});
+
+test('startStream 显式参数与当前设置不同 → 重算链并重置降级进度', async () => {
+  const s = ensureSamples();
+  const session = await createSession(s.h264Hi10, { mode: 'hw' }); // 单策略转码（硬编优先）
+
+  const calls: string[] = [];
+  const factory = fakeFactory([{ data: 10 }], calls);
+  startStream(session, 0, () => {}, () => {}, () => {}, { createProc: factory, mode: 'sw' });
+
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+
+  assert.strictEqual(session.requestedMode, 'sw');
+  assert.strictEqual(session.chain[0].encoder, 'libx264', '链已按新参数重算');
+  assert.deepStrictEqual(calls, ['sw']);
+  destroySession(session.id);
+});
+
+test('startStream 不带参数 → 沿用会话当前设置', async () => {
+  const s = ensureSamples();
+  const session = await createSession(s.h264Aac); // [copy, 转码]
+  const calls: string[] = [];
+  const factory = fakeFactory([{ data: 10 }], calls);
+  startStream(session, 0, () => {}, () => {}, () => {}, { createProc: factory });
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(session.chainIndex, 0);
+  destroySession(session.id);
+});
