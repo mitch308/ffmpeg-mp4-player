@@ -1,8 +1,9 @@
 // src/lib/stream-strategy.ts
-// 格式自适应决策：根据源视频探针结果 + 部署机硬件能力，产出按优先级排列的播放策略链。
-// 纯函数，不触碰进程/IO，便于单测。
+// 格式自适应决策：根据源视频探针结果 + 部署机硬件能力 + 播放请求参数（画质档/解码模式），
+// 产出按优先级排列的播放策略链。纯函数，不触碰进程/IO，便于单测。
 import { ENCODER_PROFILES, type EncoderProfile, type Caps } from './hw-accel';
 import type { ProbeResult } from './ffprobe';
+import { bitrateKbps, dimsFor, type QualityId, type TranscodeMode } from './quality';
 
 // 字段与旧 JS 策略对象一致：copy 策略会显式携带 null（测试断言 null 而非缺省）
 export interface Strategy {
@@ -14,6 +15,14 @@ export interface Strategy {
   audioLayout?: string | null;
   hwDecode?: string | null;
   decoder?: string | null;
+  /** 画质档缩放（仅阶梯画质）：vf 为完整 -vf 值（含滤镜名与尺寸） */
+  scale?: { width: number; height: number; vf: string } | null;
+}
+
+/** 播放请求参数：quality=画质档（默认 origin）、mode=转码/解码模式（默认 auto = 现行自动策略） */
+export interface StrategyOpts {
+  quality?: QualityId;
+  mode?: TranscodeMode;
 }
 
 /**
@@ -71,19 +80,37 @@ function targetBitrateKbps(probeResult: ProbeResult): number {
 }
 
 /** 构造转码策略：按编码器 profile 决定硬解方式与编码器 */
-function transcodeStrategy(probeResult: ProbeResult, caps: Caps): Strategy {
-  const profile = ENCODER_PROFILES[caps.encoder] || ENCODER_PROFILES.libx264;
+function transcodeStrategy(probeResult: ProbeResult, caps: Caps, quality: QualityId, mode: TranscodeMode): Strategy {
+  // 显式 sw 模式强制 libx264；其余按探测到的最优编码器（无硬编时 caps.encoder 即 libx264）
+  const encoder = mode === 'sw' ? 'libx264' : caps.encoder;
+  const profile = ENCODER_PROFILES[encoder] || ENCODER_PROFILES.libx264;
   const canHwDecode = hwDecodable(profile, probeResult);
+  // 显式硬件解码器（如 hevc_qsv）：优先于 -hwaccel 提示使用。
+  // 实测 qsv 上 -hwaccel 提示 + 硬件编码器组合存在每帧表面泄漏
+  // （内存 ~48MB/s 增长，数分钟后 ffmpeg 崩溃），显式解码器则稳定。
+  const decoder = canHwDecode ? (profile.decoderByCodec?.[probeResult.codec] || null) : null;
+
+  // 阶梯画质：固定码率 + 等比缩放；origin：现行启发式码率 + 不缩放
+  const ladder = quality !== 'origin';
+  const videoBitrate = ladder ? bitrateKbps(quality) : targetBitrateKbps(probeResult);
+
+  let scale: Strategy['scale'] = null;
+  if (ladder) {
+    const { width, height } = dimsFor(quality as Exclude<QualityId, 'origin'>, probeResult);
+    // 显式解码器帧驻留 GPU（qsv 表面），普通 scale 滤镜会报格式转换错误，须用厂商硬件缩放滤镜；
+    // 混合提示路径（-hwaccel 无 output_format 限定）帧自动回落系统内存，普通 scale 即可
+    const filter = decoder ? (profile.scaleHwFilter || 'scale') : 'scale';
+    scale = { width, height, vf: `${filter}=${width}:${height}` };
+  }
+
   return {
     label: profile.mode === 'sw' ? 'sw' : 'hw',
     video: 'transcode',
-    encoder: caps.encoder,
+    encoder,
     hwDecode: canHwDecode ? profile.hwaccel : null,
-    // 显式硬件解码器（如 hevc_qsv）：优先于 -hwaccel 提示使用。
-    // 实测 qsv 上 -hwaccel 提示 + 硬件编码器组合存在每帧表面泄漏
-    // （内存 ~48MB/s 增长，数分钟后 ffmpeg 崩溃），显式解码器则稳定。
-    decoder: canHwDecode ? (profile.decoderByCodec?.[probeResult.codec] || null) : null,
-    videoBitrate: targetBitrateKbps(probeResult),
+    decoder,
+    videoBitrate,
+    scale,
     audio: audioStrategy(probeResult),
     audioLayout: audioStrategy(probeResult) === 'aac' ? audioLayout(probeResult) : null
   };
@@ -93,12 +120,20 @@ function transcodeStrategy(probeResult: ProbeResult, caps: Caps): Strategy {
  * 策略链：直通资格时 [copy, 转码]，否则 [转码]。
  * 上游失败时按序取下一个重试（见 session-manager）。
  *
+ * 直通豁免规则：显式选择了解码模式（hw/sw）或指定了阶梯画质时跳过 copy——
+ * 直通不经任何解码，与"解码设置"语义冲突；阶梯画质必然重编码。
+ *
  * @param {object} probeResult - ffprobe 结果（codec/pixFmt/audio）
  * @param {{encoder: string, mode: string}} caps - hw-accel 探测结果
+ * @param {StrategyOpts} [opts] - 画质档与解码模式（缺省 = 完全旧行为）
  */
-export function strategyChain(probeResult: ProbeResult, caps: Caps): Strategy[] {
+export function strategyChain(probeResult: ProbeResult, caps: Caps, opts: StrategyOpts = {}): Strategy[] {
+  const quality = opts.quality ?? 'origin';
+  const mode = opts.mode ?? 'auto';
+  const copyAllowed = quality === 'origin' && mode === 'auto';
+
   const chain: Strategy[] = [];
-  if (copyEligible(probeResult)) {
+  if (copyAllowed && copyEligible(probeResult)) {
     chain.push({
       label: 'copy',
       video: 'copy',
@@ -108,6 +143,6 @@ export function strategyChain(probeResult: ProbeResult, caps: Caps): Strategy[] 
       audioLayout: null
     });
   }
-  chain.push(transcodeStrategy(probeResult, caps));
+  chain.push(transcodeStrategy(probeResult, caps, quality, mode));
   return chain;
 }

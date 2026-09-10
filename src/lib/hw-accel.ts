@@ -21,6 +21,8 @@ export interface EncoderProfile {
   encodeArgs: string[];
   label: string;
   decoderByCodec?: Record<string, string>;
+  /** 显式硬件解码器路径帧驻留 GPU，普通 scale 滤镜无法处理；指定该厂商的硬件缩放滤镜（如 scale_qsv） */
+  scaleHwFilter?: string;
 }
 
 // 优先级从高到低（NVIDIA > Intel > AMD > 通用 Linux/Mac 方案）
@@ -56,6 +58,8 @@ export const ENCODER_PROFILES: Record<string, EncoderProfile> = {
       mpeg2video: 'mpeg2_qsv',
       mjpeg: 'mjpeg_qsv'
     },
+    // 显式解码器输出 qsv GPU 帧，缩放必须走硬件 vpp 滤镜（普通 scale 会报格式转换错误）
+    scaleHwFilter: 'scale_qsv',
     encodeArgs: ['-preset', 'veryfast'],
     label: 'Intel QSV'
   },

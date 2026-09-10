@@ -128,3 +128,78 @@ test('环绕声源转 AAC 时标注标准布局（防止 ffmpeg 写出 chanCfg=0
   assert.strictEqual(copy.audio, 'copy');
   assert.strictEqual(copy.audioLayout, null);
 });
+
+// ===== 画质档位与解码模式（strategyChain opts）=====
+
+test('不带 opts 时行为与旧版完全一致（回归）', () => {
+  const chain = strategyChain(probe(), NVENC);
+  assert.strictEqual(chain.length, 2);
+  assert.strictEqual(chain[0].label, 'copy');
+  assert.strictEqual(chain[1].encoder, 'h264_nvenc');
+  assert.ok((chain[1] as any).scale == null, 'origin 转码无缩放（null/undefined 均可）');
+});
+
+test('origin + auto 显式传入同样保持旧行为', () => {
+  const chain = strategyChain(probe(), NVENC, { quality: 'origin', mode: 'auto' });
+  assert.strictEqual(chain.length, 2);
+  assert.strictEqual(chain[0].label, 'copy');
+});
+
+test('阶梯画质跳过直通：固定码率 + 缩放尺寸', () => {
+  // 1080p 源选 720p：码率 2500k，缩放到 1280x720
+  const chain = strategyChain(probe(), NVENC, { quality: '720p' });
+  assert.strictEqual(chain.length, 1, '阶梯画质无 copy');
+  const s = chain[0];
+  assert.strictEqual(s.video, 'transcode');
+  assert.strictEqual(s.videoBitrate, 2500);
+  assert.ok(s.scale, '应携带缩放');
+  assert.strictEqual(s.scale!.width, 1280);
+  assert.strictEqual(s.scale!.height, 720);
+  // nvenc 混合管线帧在系统内存 → 普通 scale 滤镜
+  assert.strictEqual(s.scale!.vf, 'scale=1280:720');
+});
+
+test('阶梯画质 + sw 模式：libx264 也用固定码率，label=sw', () => {
+  const chain = strategyChain(probe({ codec: 'hevc' }), NVENC, { quality: '720p', mode: 'sw' });
+  assert.strictEqual(chain.length, 1);
+  assert.strictEqual(chain[0].encoder, 'libx264');
+  assert.strictEqual(chain[0].label, 'sw');
+  assert.strictEqual(chain[0].videoBitrate, 2500);
+});
+
+test('mode=sw 跳过直通（可直通源也强制转码）', () => {
+  const chain = strategyChain(probe(), NVENC, { mode: 'sw' });
+  assert.strictEqual(chain.length, 1);
+  assert.strictEqual(chain[0].encoder, 'libx264');
+  assert.strictEqual(chain[0].label, 'sw');
+  const baseline = strategyChain(probe(), NVENC);
+  assert.strictEqual(chain[0].videoBitrate, baseline[1].videoBitrate, 'origin 转码码率仍走启发式');
+});
+
+test('mode=hw 跳过直通，硬件编码器优先', () => {
+  const chain = strategyChain(probe(), NVENC, { mode: 'hw' });
+  assert.strictEqual(chain.length, 1);
+  assert.strictEqual(chain[0].encoder, 'h264_nvenc');
+  assert.strictEqual(chain[0].label, 'hw');
+});
+
+test('mode=hw 但部署机无硬编 → 等价 libx264', () => {
+  const chain = strategyChain(probe({ codec: 'hevc' }), SW, { mode: 'hw' });
+  assert.strictEqual(chain.length, 1);
+  assert.strictEqual(chain[0].encoder, 'libx264');
+});
+
+test('QSV 显式解码路径缩放用 scale_qsv 滤镜（帧驻留 GPU）', () => {
+  // hevc 8bit 源 + qsv：decoder=hevc_qsv → GPU 帧 → scale_qsv
+  const chain = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p', width: 2560, height: 1440 }), QSV, { quality: '1080p' });
+  const s = chain[0];
+  assert.strictEqual(s.decoder, 'hevc_qsv');
+  assert.ok(s.scale!.vf.startsWith('scale_qsv=1920:1080'), `vf=${s.scale!.vf}`);
+});
+
+test('QSV 但源不可硬解（10bit）→ 软解帧在内存 → 普通 scale', () => {
+  const chain = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p10le', width: 2560, height: 1440 }), QSV, { quality: '1080p' });
+  const s = chain[0];
+  assert.strictEqual(s.decoder, null);
+  assert.strictEqual(s.scale!.vf, 'scale=1920:1080');
+});
