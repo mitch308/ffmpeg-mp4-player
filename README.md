@@ -87,6 +87,43 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 - `DELETE /api/sessions/:id` → 销毁会话
 - `GET /api/status` → `{ activeSessions, hw: { encoder, label, mode } }`
 
+## iframe 嵌入
+
+播放器可作为 iframe 嵌入任意页面（需与本服务同源访问，或直接指向服务地址）：
+
+```html
+<iframe
+  src="http://<host>:<port>/player.html?url=<encodeURIComponent(视频地址)>&title=<标题>&autoplay=1"
+  allow="autoplay; fullscreen"
+  allowfullscreen
+></iframe>
+```
+
+### URL 参数
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `url` | 必需 | 视频地址（`encodeURIComponent` 后传入） |
+| `title` | 空 | 顶部标题栏文字 |
+| `ui` | `pc` | 控制器主题：`pc`（紧凑悬浮条）/ `tv`（大字号通栏） |
+| `quality` | `origin` | 初始画质档：`720p` / `1080p` / `2k` / `origin`；仅展示不高于源分辨率的档位 |
+| `mode` | `auto` | 解码模式：`auto`（自动，直通优先）/ `hw`（硬解硬编）/ `sw`（软解软编）；硬解不可用时菜单不显示硬解选项 |
+| `autoplay` | `1` | 自动播放；受浏览器策略限制时先静音自动播放，用户点音量图标恢复声音 |
+
+### 画质阶梯
+
+720p→2.5Mbps、1080p→5Mbps、2K→10Mbps，切换画质从当前播放位置重转码。画面比例（原始/16:9/4:3）为纯前端 CSS 处理，后端输出不变。
+
+### 手工验证清单
+
+- [ ] PC 主题：控制栏显隐（mousemove / 3s / 5s / 暂停常显 / 单击 / 双击）
+- [ ] TV 主题：大字号、时间居中、无全屏按钮
+- [ ] 画质切换：位置保持、画面变小、恢复播放
+- [ ] 解码切换：硬解 ↔ 软解不炸流；无硬编机器不显示硬解选项
+- [ ] 倍速 0.75–3x；音量拖动与静音切换
+- [ ] 精确 seek（拖到未缓冲区）、断网 5s 自动恢复
+- [ ] 静音自动播放 → 点音量恢复
+
 ## 开发
 
 从源码构建（`npm run build` / `npm test`）需要 Node ≥ 22（vite@8 / vitest@5 工具链要求）；构建产物与已发布的包本身在 Node ≥ 18 上运行。

@@ -3,10 +3,10 @@
 ## 常用命令
 
 - `npm start` — 启动 CLI（`node dist/bin.cjs`）；开发时先 `npm run build`
-- `npm run build` — vite 三连构建（主库 es+cjs → `dist/index.*`，child → `dist/child.cjs`，bin → `dist/bin.cjs`）
+- `npm run build` — vite 四连构建（主库 es+cjs → `dist/index.*`，child → `dist/child.cjs`，bin → `dist/bin.cjs`，前端 → `dist/client/`）
 - `npm test` — 运行 vitest（先自动构建：`npm run build && vitest run`）
 - 跑单个测试文件：`npx vitest run test/ffmpeg-process.test.ts`
-- 没有配置 lint/typecheck。运行时唯一依赖是 `express`（TS 源码经 vite 构建，无独立 tsc 步骤）。
+- 无 lint；`npm run typecheck` 校验两端 TS（根 tsconfig 面向 Node，`tsconfig.client.json` 面向 DOM）。运行时唯一依赖是 `express`。
 - `FFMPEG_HW_ENCODER=none npm start` 强制软件编码；也可设为具体编码器名（如 `h264_qsv`）。不设置时探测顺序：nvenc > qsv > amf > vaapi > videotoolbox > libx264。
 
 ## ffmpeg/ffprobe 二进制
@@ -22,6 +22,7 @@
 - 输出不变式：视频恒为 H.264；音频为 AAC（拷贝或转码）或不存在。源必须是 H.264 8bit yuv420p 才有直通资格。
 - 硬件编码采用「混合」管线（`-hwaccel` 硬解提示 + 硬件编码器）；全 GPU 帧驻留方案已实测并被有意放弃（见 `src/lib/hw-accel.ts` 注释）。
 - 构建：三个 vite 配置（主库/child/bin）均设 `copyPublicDir: false`——`public/` 经 package `files` 直接发布，拷进 `dist/` 只会让包体积翻倍。
+- 前端播放器源码在 `src/client/`（TS，无运行时框架），经 `vite.config.client.ts` 构建到 `dist/client/`，server 静态服务按 `public/` → `dist/client/` fallback；`public/` 只剩 demo 页（iframe 嵌入 `/player.html`）。图标在 `src/client/icons/`（`?raw` 内联注入保留 currentColor）。
 
 ## 踩坑记录
 
@@ -34,6 +35,7 @@
 - 以上两类问题在浏览器端均只表现为 `CHUNK_DEMUXER_ERROR_APPEND_FAILED`（UI 上是泛泛的"播放错误"），服务端与 console 都无报错——遇到"播放失败但无日志"先用无头浏览器对 init segment 做最小 append 实验。
 - QSV 硬解必须用显式解码器（`-c:v hevc_qsv` 等，见 `src/lib/hw-accel.ts` 的 `decoderByCodec`），不要用 `-hwaccel qsv` 提示：提示路径 + 硬件编码器组合存在每帧表面泄漏（内存 ~48MB/s 增长，数分钟后 ffmpeg 无声崩溃，表现为播放中途断流且无任何日志）；显式解码器稳定且约 3-4x 实时。其他厂商（nvenc/amf）未经本机验证，暂保留 -hwaccel 提示。
 - 客户端 `pumpReader` 的水位线（45s 暂停 / 15s 恢复）不能删：转码速度远快于实时，若无水位线会撑爆 Chrome MSE 配额（4K 片约 117 秒 ≈ 150MB），之后 appendBuffer 连续 QuotaExceededError 走静默丢 chunk 分支，buffered 出现空洞、播放头撞洞永久卡死（表现为"播放到某处停止且无任何报错"）。
+- QSV 路径缩放必须用普通 `scale`，不要用 `scale_qsv`：后者运行时损坏（"Impossible to convert between the formats"+"Function not implemented"）；普通 scale + 显式 qsv 解码器可用（get_format 协商让解码器输出系统内存帧，硬解仍生效）。结论基于 ffmpeg 6.1.1 实测，升级 7.x 需复验（见 `src/lib/hw-accel.ts` 的 `scaleHwFilter` 注释）。
 - 客户端流中断走自动恢复（`handleStreamFailure`：从当前播放位置重建流，连续 4 次失败才报错），不要改回直接 setError：数小时长片播放中瞬时网络抖动（切后台被系统/浏览器切断、休眠唤醒等）是常态，终态报错等于播放报废。
 
 ## 测试
