@@ -29,10 +29,15 @@ function ffprobeJson(file: string): Promise<any> {
 }
 
 async function createSession(url: string): Promise<any> {
+  return createSessionBody({ url });
+}
+
+// 泛化版：调用方可附加 quality/mode 等会话参数
+async function createSessionBody(body: Record<string, unknown>): Promise<any> {
   const r = await fetch(`${BASE}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url })
+    body: JSON.stringify(body)
   });
   if (r.status !== 200) {
     throw new Error(`create session failed: HTTP ${r.status} ${await r.text()}`);
@@ -113,4 +118,53 @@ test('/api/status 报告硬件能力', async () => {
   expect(j.hw && j.hw.encoder).toBeTruthy();
   expect(['gpu', 'hybrid', 'sw']).toContain(j.hw.mode);
   console.log('E2E 硬件信息:', JSON.stringify(j.hw));
+});
+
+// ===== 画质档 / 解码模式 =====
+
+test('画质档 720p：1080p 源 → 缩放转码，产物 1280x720', async () => {
+  const s = ensureSamples();
+  const r = await fetch(`${BASE}/api/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: s.h264Aac1080, quality: '720p' })
+  });
+  if (r.status !== 200) throw new Error(`create failed: HTTP ${r.status} ${await r.text()}`);
+  const info = (await r.json()) as { sessionId: string; qualities: string[]; streamMode: string };
+  expect(info.qualities).toEqual(['720p', 'origin']);
+  expect(info.streamMode).not.toBe('copy');   // 阶梯画质必然转码
+
+  const data = await fetchStream(info.sessionId, 0);
+  expect(data.length).toBeGreaterThan(1000);
+  const tmp = path.join(os.tmpdir(), 'e2e-q720.mp4');
+  fs.writeFileSync(tmp, data);
+  const j = await ffprobeJson(tmp);
+  const v = j.streams.find((x: any) => x.codec_type === 'video');
+  expect(v.codec_name).toBe('h264');
+  expect(v.width).toBe(1280);
+  expect(v.height).toBe(720);
+});
+
+test('画质档不可用（320x240 源选 720p）→ 400', async () => {
+  const s = ensureSamples();
+  const r = await fetch(`${BASE}/api/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: s.h264Aac, quality: '720p' })
+  });
+  expect(r.status).toBe(400);
+});
+
+test('mode=sw 强制软件转码（10bit 源）', async () => {
+  const s = ensureSamples();
+  const info = await createSessionBody({ url: s.h264Hi10, mode: 'sw' });
+  expect(info.streamMode).toBe('sw');
+  expect(info.encoder).toBe('libx264');
+  const data = await fetchStream(info.sessionId, 0);
+  const tmp = path.join(os.tmpdir(), 'e2e-sw.mp4');
+  fs.writeFileSync(tmp, data);
+  const j = await ffprobeJson(tmp);
+  const v = j.streams.find((x: any) => x.codec_type === 'video');
+  expect(v.codec_name).toBe('h264');
+  expect(v.pix_fmt).toBe('yuv420p');
 });

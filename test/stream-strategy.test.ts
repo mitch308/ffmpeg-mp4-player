@@ -189,12 +189,13 @@ test('mode=hw 但部署机无硬编 → 等价 libx264', () => {
   assert.strictEqual(chain[0].encoder, 'libx264');
 });
 
-test('QSV 显式解码路径缩放用 scale_qsv 滤镜（帧驻留 GPU）', () => {
-  // hevc 8bit 源 + qsv：decoder=hevc_qsv → GPU 帧 → scale_qsv
+test('QSV 显式解码路径缩放用普通 scale（get_format 协商输出系统内存帧）', () => {
+  // hevc 8bit 源 + qsv：decoder=hevc_qsv → 实测 get_format 协商让解码器输出系统内存帧，
+  // 普通 scale 可用；scale_qsv 反而运行时损坏（见 hw-accel.ts qsv profile 注释）
   const chain = strategyChain(probe({ codec: 'hevc', pixFmt: 'yuv420p', width: 2560, height: 1440 }), QSV, { quality: '1080p' });
   const s = chain[0];
   assert.strictEqual(s.decoder, 'hevc_qsv');
-  assert.ok(s.scale!.vf.startsWith('scale_qsv=1920:1080'), `vf=${s.scale!.vf}`);
+  assert.strictEqual(s.scale!.vf, 'scale=1920:1080');
 });
 
 test('QSV 但源不可硬解（10bit）→ 软解帧在内存 → 普通 scale', () => {

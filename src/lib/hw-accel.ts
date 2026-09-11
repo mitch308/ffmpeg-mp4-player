@@ -21,7 +21,12 @@ export interface EncoderProfile {
   encodeArgs: string[];
   label: string;
   decoderByCodec?: Record<string, string>;
-  /** 显式硬件解码器路径帧驻留 GPU，普通 scale 滤镜无法处理；指定该厂商的硬件缩放滤镜（如 scale_qsv） */
+  /**
+   * 显式硬件解码器路径的缩放滤镜（缺省 'scale'）。
+   * 实测 ffmpeg 会经 get_format 协商，在下游为软滤镜时让显式解码器输出
+   * 系统内存帧（硬解仍生效，帧从 GPU 拷出），普通 scale 即可处理；
+   * 只有当某厂商解码器强制 GPU 帧驻留时才需在此指定厂商硬件缩放滤镜。
+   */
   scaleHwFilter?: string;
 }
 
@@ -58,8 +63,14 @@ export const ENCODER_PROFILES: Record<string, EncoderProfile> = {
       mpeg2video: 'mpeg2_qsv',
       mjpeg: 'mjpeg_qsv'
     },
-    // 显式解码器输出 qsv GPU 帧，缩放必须走硬件 vpp 滤镜（普通 scale 会报格式转换错误）
-    scaleHwFilter: 'scale_qsv',
+    // 缩放滤镜实测裁决（ffmpeg-static + 本机 QSV 驱动，Task 13）：
+    //  1. `scale_qsv` 运行时损坏：报 "Impossible to convert between the formats ... auto_scale_0"
+    //     + "Function not implemented"（复现 Task 11 无头浏览器 e2e 的 quality=720p 失败）。
+    //  2. 普通 `scale` + 显式 h264_qsv/hevc_qsv 解码器：可用（EXIT=0，产物 1280x720 yuv420p）。
+    //     机制：下游为软滤镜时 get_format() 协商让显式 qsv 解码器输出系统内存 nv12 帧
+    //     （硬解仍生效，帧从 GPU 拷出），软 scale 后 h264_qsv 编码器自行上传。
+    // 故显式设为 'scale'（等于缺省值，保留字段以记录结论、防止将来误改回 scale_qsv）。
+    scaleHwFilter: 'scale',
     encodeArgs: ['-preset', 'veryfast'],
     label: 'Intel QSV'
   },

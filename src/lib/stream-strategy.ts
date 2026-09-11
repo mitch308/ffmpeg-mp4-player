@@ -97,8 +97,10 @@ function transcodeStrategy(probeResult: ProbeResult, caps: Caps, quality: Qualit
   let scale: Strategy['scale'] = null;
   if (ladder) {
     const { width, height } = dimsFor(quality as Exclude<QualityId, 'origin'>, probeResult);
-    // 显式解码器帧驻留 GPU（qsv 表面），普通 scale 滤镜会报格式转换错误，须用厂商硬件缩放滤镜；
-    // 混合提示路径（-hwaccel 无 output_format 限定）帧自动回落系统内存，普通 scale 即可
+    // 缩放滤镜选择：实测显式解码器（如 hevc_qsv）在下游为软滤镜时，ffmpeg 会经
+    // get_format 协商让其输出系统内存帧（硬解仍生效），普通 scale 即可；
+    // qsv 的硬件缩放滤镜 scale_qsv 反而运行时损坏（见 hw-accel.ts qsv profile 注释）。
+    // scaleHwFilter 仅为强制 GPU 帧驻留的厂商预留。
     const filter = decoder ? (profile.scaleHwFilter || 'scale') : 'scale';
     scale = { width, height, vf: `${filter}=${width}:${height}` };
   }

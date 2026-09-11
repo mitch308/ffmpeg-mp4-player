@@ -14,6 +14,7 @@ export interface Samples {
   h264Hi10: string;
   hevcHi10: string;
   hevc8: string;
+  h264Aac1080: string;   // 1080p H.264+AAC：画质档 e2e 用（可提供 720p 档位）
 }
 
 let cache: Samples | null = null;
@@ -24,11 +25,11 @@ export function ensureSamples(): Samples {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ffmpeg-player-test-'));
   const ff = getFfmpegPath();
 
-  const gen = (file: string, videoArgs: string[], audioArgs: string[] | null): string => {
+  const gen = (file: string, videoArgs: string[], audioArgs: string[] | null, size = '320x240'): string => {
     const out = path.join(dir, file);
     const args = [
       '-v', 'error',
-      '-f', 'lavfi', '-i', 'testsrc=duration=1:size=320x240:rate=30',
+      '-f', 'lavfi', '-i', `testsrc=duration=1:size=${size}:rate=30`,
       '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1'
     ];
     if (audioArgs === null) {
@@ -50,7 +51,9 @@ export function ensureSamples(): Samples {
     // HEVC Main10 → 软解 + 硬编（10bit 帧无法直接交给 H.264 硬件编码器）
     hevcHi10: gen('hevc_hi10.mp4', ['-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-preset', 'ultrafast', '-x265-params', 'log-level=error'], null),
     // HEVC 8bit → 可硬解 + 硬编
-    hevc8: gen('hevc8.mp4', ['-c:v', 'libx265', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', '-x265-params', 'log-level=error'], null)
+    hevc8: gen('hevc8.mp4', ['-c:v', 'libx265', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', '-x265-params', 'log-level=error'], null),
+    // 1080p H.264+AAC → 画质档 e2e（720p 严格低于源，可缩放）
+    h264Aac1080: gen('h264_aac_1080.mp4', ['-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac'], [], '1920x1080')
   };
   return cache;
 }

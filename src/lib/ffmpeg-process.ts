@@ -40,6 +40,12 @@ export function buildArgs(url: string, startTime: number, strategy: Strategy): s
     // origin 软转码保持 CRF 23 质量优先（与原行为一致）
     const kbps = strategy.videoBitrate || 6000;
     const maxrate = Math.round(kbps * 1.5);
+    // 输出恒为浏览器可解的 8bit yuv420p：10bit/422 源经 libx264 会被原样保留
+    // （high10 输出浏览器不可解），显式声明目标像素格式让 swscale 自动转换；
+    // 8bit yuv420p 源下该声明为 no-op。硬件编码器（qsv 等）输出恒为 8bit，无需声明。
+    if (strategy.encoder === 'libx264') {
+      outputOpts.push('-pix_fmt', 'yuv420p');
+    }
     if (strategy.encoder === 'libx264' && !strategy.scale) {
       outputOpts.push(
         '-c:v', strategy.encoder,

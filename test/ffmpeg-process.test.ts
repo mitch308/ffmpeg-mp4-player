@@ -164,8 +164,9 @@ test('阶梯画质（libx264）：固定码率模式，不用 CRF', () => {
 
 test('阶梯画质：-vf 滤镜按策略 vf 值输出', () => {
   assert.ok(buildArgs('u', 0, swLadder).includes('scale=1280:720'));
+  // vf 值由 stream-strategy 组装、buildArgs 原样透传（fixture 手填厂商滤镜串验证透传）
   const a = buildArgs('u', 0, qsvLadder);
-  assert.ok(a.includes('scale_qsv=1920:1080'), 'QSV 显式解码帧在 GPU，须用 scale_qsv');
+  assert.ok(a.includes('scale_qsv=1920:1080'), 'vf 值按策略原样透传');
   // -vf 与 -af 可共存（音频声道布局滤镜独立）
   const i = idx(a, '-vf');
   assert.ok(i !== -1 && a[i + 1] === 'scale_qsv=1920:1080');
@@ -175,6 +176,17 @@ test('origin 转码（无 scale）：libx264 保持 CRF、无 -vf（回归）', 
   const a = buildArgs('u', 0, swStrat);
   assert.ok(idx(a, '-crf') !== -1);
   assert.strictEqual(idx(a, '-vf'), -1);
+});
+
+test('软编 10bit 源：显式 -pix_fmt yuv420p（high10 原样输出浏览器不可解）', () => {
+  const a = buildArgs('u', 0, swStrat);
+  assert.ok(idx(a, '-pix_fmt') !== -1 && a[idx(a, '-pix_fmt') + 1] === 'yuv420p');
+  // 阶梯画质（固定码率分支）同样强制
+  const ladder = buildArgs('u', 0, swLadder);
+  assert.ok(idx(ladder, '-pix_fmt') !== -1 && ladder[idx(ladder, '-pix_fmt') + 1] === 'yuv420p');
+  // 硬件编码器不加（qsv 等输出恒为 8bit，声明反而可能与 qsv 像素格式冲突）
+  const hw = buildArgs('u', 0, qsvHw);
+  assert.strictEqual(idx(hw, '-pix_fmt'), -1);
 });
 
 test('直通路径无 -vf（回归）', () => {
