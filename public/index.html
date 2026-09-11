@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FFmpeg Player</title>
+  <title>FFmpeg Player - Demo</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="container">
     <h1>FFmpeg Player</h1>
+    <p class="hint">输入视频文件 URL，播放器以 iframe 嵌入方式加载（player.html?url=…）</p>
 
     <div class="url-bar">
       <input
@@ -20,26 +21,24 @@
       <button id="loadBtn">加载</button>
     </div>
 
-    <div id="status" class="status hidden"></div>
+    <div id="error" class="error hidden"></div>
 
-    <div class="player-wrapper">
-      <video id="video" controls style="display:none;"></video>
-      <div id="loading" class="loading hidden">
-        <div class="spinner"></div>
-        <span>正在加载视频...</span>
-      </div>
-      <div id="error" class="error hidden"></div>
+    <div id="embedArea" class="embed-area hidden">
+      <iframe
+        id="playerFrame"
+        title="视频播放器"
+        allow="autoplay; fullscreen"
+        allowfullscreen
+      ></iframe>
     </div>
 
-    <div class="info" id="info" style="display:none;">
-      <span id="infoDuration">时长: --</span>
-      <span id="infoResolution">分辨率: --</span>
-      <span id="infoCodec">编码: --</span>
-      <span id="infoAudio">音频: --</span>
-      <span id="infoMode">方式: --</span>
+    <div id="embedCode" class="embed-code hidden">
+      <h2>嵌入代码</h2>
+      <pre><code id="embedCodeText"></code></pre>
+      <button id="copyBtn">复制</button>
     </div>
   </div>
 
-  <script src="player.js"></script>
+  <script src="demo.js"></script>
 </body>
 </html>

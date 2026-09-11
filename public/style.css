@@ -69,94 +69,62 @@ h1 {
   cursor: not-allowed;
 }
 
-.status {
+/* demo 页：iframe 嵌入区与嵌入代码 */
+.hint {
+  text-align: center;
+  color: #888;
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+
+.error {
   padding: 8px 16px;
   border-radius: 6px;
   margin-bottom: 12px;
   font-size: 13px;
-  background: #0f3460;
+  background: #3a1626;
+  color: #e94560;
 }
+.error.hidden { display: none; }
 
-.status.hidden {
-  display: none;
-}
-
-.player-wrapper {
-  position: relative;
+.embed-area {
+  width: 100%;
+  aspect-ratio: 16 / 9;
   background: #000;
   border-radius: 10px;
   overflow: hidden;
-  height: 400px; /* 固定播放器区域高度，视频内容自适应 */
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin-bottom: 20px;
 }
-
-.player-wrapper video {
+.embed-area.hidden { display: none; }
+.embed-area iframe {
   width: 100%;
   height: 100%;
-  object-fit: contain; /* 内容在固定区域内等比缩放，超出部分留黑边 */
+  border: 0;
   display: block;
 }
 
-/* 覆盖层：绝对定位铺满播放器，避免与 video 并排挤成 flex 子项 */
-.loading {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
+.embed-code {
+  margin-top: 8px;
+}
+.embed-code h2 {
+  font-size: 16px;
   color: #aaa;
-  background: rgba(0, 0, 0, 0.6);
+  margin-bottom: 10px;
 }
-
-.loading.hidden {
-  display: none;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 4px solid #333;
-  border-top-color: #e94560;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.error {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  color: #e94560;
-  text-align: center;
-  background: rgba(0, 0, 0, 0.7);
-}
-
-.error.hidden {
-  display: none;
-}
-
-.info {
-  display: flex;
-  gap: 24px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: #888;
-}
-
-.info span {
+.embed-code pre {
   background: #16213e;
-  padding: 6px 12px;
-  border-radius: 4px;
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  font-size: 12px;
+  color: #8ab4ff;
+}
+.embed-code button {
+  margin-top: 10px;
+  padding: 8px 18px;
+  border: none;
+  border-radius: 6px;
+  background: #0f3460;
+  color: #eee;
+  cursor: pointer;
 }
