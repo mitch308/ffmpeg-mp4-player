@@ -106,6 +106,7 @@ h1 {
 .embed-code {
   margin-top: 8px;
 }
+.embed-code.hidden { display: none; }
 .embed-code h2 {
   font-size: 16px;
   color: #aaa;
