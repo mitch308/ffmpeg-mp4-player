@@ -82,10 +82,23 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 
 ## HTTP API
 
-- `POST /api/sessions` `{ "url": "..." }` → `{ sessionId, duration, width, height, codec, audioCodec, streamMode, ... }`
-- `GET /api/sessions/:id/stream?start=秒` → fMP4 流（`video/mp4`）
+- `POST /api/sessions` — 创建会话并探测源。请求体 `{ "url": "..." }`，另有两个可选字段：
+  - `quality`：画质档 `origin`（默认）/ `720p` / `1080p` / `2k`；仅允许不高于源分辨率的档位（超出 → 400）
+  - `mode`：解码模式 `auto`（默认，直通优先）/ `hw`（硬解硬编）/ `sw`（软解软编）
+- `GET /api/sessions/:id/stream?start=秒` → fMP4 流（`video/mp4`）；可选 query 参数 `quality` / `mode`，语义同上，合法值持久化到会话（后续流请求沿用）
 - `DELETE /api/sessions/:id` → 销毁会话
 - `GET /api/status` → `{ activeSessions, hw: { encoder, label, mode } }`
+
+`POST /api/sessions` 响应字段：
+
+| 字段 | 说明 |
+|---|---|
+| `sessionId` / `duration` / `width` / `height` / `codec` / `pixFmt` | 源信息 |
+| `audioCodec` | 输出音频编码，恒为 `aac`；无音频轨时为 `null` |
+| `streamMode` / `encoder` / `hw` | 实际生效策略 `copy` / `hw` / `sw`；编码器名（直通时为 `copy`）；是否硬编 |
+| `qualities` | 可用画质档数组，降序，`origin` 恒在末位 |
+| `hwAvailable` | 部署机硬编可用性（前端用于显隐"硬解"选项） |
+| `requestedQuality` / `requestedMode` | 本次请求的画质档 / 解码模式 |
 
 ## iframe 嵌入
 

@@ -24,9 +24,11 @@ const here = path.dirname(
 const publicDir = path.resolve(here, '../public');
 
 // 前端 TS 构建产物（player.html 等，见 vite.config.client.ts）：
-// dist 产物模式下与 public 同级（<pkg>/dist/client）；源码模式（vitest）在仓库根/dist/client
-const clientDir = [path.resolve(here, 'client'), path.resolve(here, '../dist/client')]
-  .find((p) => existsSync(p));
+// dist 产物模式下与 public 同级（here=<pkg>/dist → <pkg>/dist/client）；
+// 源码模式（vitest，here=<repo>/src）下同一相对路径解析到 <repo>/dist/client，两种位置统一。
+// 不要把 <repo>/src/client 加进候选：那是未编译的前端源码，命中后静态服务会指错目录，
+// server.test 的 dist/client 断言也随之空转。
+const clientDir = [path.resolve(here, '../dist/client')].find((p) => existsSync(p));
 
 export function createApp(options: { staticPlayer?: boolean } = {}): Express {
   const app = express();
@@ -117,6 +119,12 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
     }
     if (req.query.mode !== undefined && !mode) {
       return res.status(400).json({ error: `invalid mode: ${req.query.mode}` });
+    }
+    // 显式携带合法画质档时，还需在源可用范围内（不放大）；未携带沿用会话已持久化值
+    if (quality && !availableQualities(session.probeResult).includes(quality)) {
+      return res.status(400).json({
+        error: `quality ${quality} 不可用（源 ${session.probeResult.width}x${session.probeResult.height}）`
+      });
     }
 
     // 设置 CORS 头

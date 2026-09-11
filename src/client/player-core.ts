@@ -220,9 +220,12 @@ export class PlayerCore {
         }
       }
       sb.addEventListener('updateend', () => this.pumpBuffer());
-      sb.addEventListener('error', () => {
+      sb.addEventListener('error', (e) => {
         if (myGen !== this.gen) return;
-        this.fail('解码错误');
+        // error 事件规范上是普通 Event，但部分实现会在 target 上挂 error 属性；
+        // 受控窄化尽量带出细节，拿不到保持固定文案
+        const detail = (e.target as (EventTarget & { error?: { message?: string } }) | null)?.error?.message;
+        this.fail(detail ? '解码错误: ' + detail : '解码错误');
       });
 
       this.fetchStream(start, myGen);

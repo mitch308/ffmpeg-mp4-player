@@ -66,7 +66,8 @@ export const ENCODER_PROFILES: Record<string, EncoderProfile> = {
     // 缩放滤镜实测裁决（ffmpeg-static + 本机 QSV 驱动，Task 13）：
     //  1. `scale_qsv` 运行时损坏：报 "Impossible to convert between the formats ... auto_scale_0"
     //     + "Function not implemented"（复现 Task 11 无头浏览器 e2e 的 quality=720p 失败）。
-    //  2. 普通 `scale` + 显式 h264_qsv/hevc_qsv 解码器：可用（EXIT=0，产物 1280x720 yuv420p）。
+    //  2. 普通 `scale` + 显式 h264_qsv 解码器：实测可用（EXIT=0，产物 1280x720 yuv420p）；
+    //     hevc_qsv 系同机制外推、未实测。
     //     机制：下游为软滤镜时 get_format() 协商让显式 qsv 解码器输出系统内存 nv12 帧
     //     （硬解仍生效，帧从 GPU 拷出），软 scale 后 h264_qsv 编码器自行上传。
     // 故显式设为 'scale'（等于缺省值，保留字段以记录结论、防止将来误改回 scale_qsv）。

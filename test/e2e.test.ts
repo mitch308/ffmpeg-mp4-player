@@ -143,6 +143,12 @@ test('画质档 720p：1080p 源 → 缩放转码，产物 1280x720', async () =
   expect(v.codec_name).toBe('h264');
   expect(v.width).toBe(1280);
   expect(v.height).toBe(720);
+  // 码率量级断言：720p 目标 2.5Mbps，但 1 秒 testsrc 合成样本极易压缩，
+  // VBR 大幅欠冲——实测 h264_qsv ≈250kbps（丢失 -b:v 时 ≈140kbps）、libx264 ≈1.9Mbps。
+  // 下限 150k：容忍欠冲，仍能拦住丢失码率参数的 qsv 极低码率回归；上限 6M。
+  const bitRate = parseInt(v.bit_rate, 10);
+  expect(bitRate).toBeGreaterThan(150 * 1000);
+  expect(bitRate).toBeLessThan(6000 * 1000);
 });
 
 test('画质档不可用（320x240 源选 720p）→ 400', async () => {

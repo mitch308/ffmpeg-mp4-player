@@ -160,6 +160,20 @@ describe('startServer 本进程模式', () => {
     expect(res.status).toBe(400);
   });
 
+  test('GET /stream 请求源不可用的画质档 → 400（错误信息含源分辨率）', async () => {
+    server = await startServer({ port: 0 });
+    const samples = ensureSamples(); // 320x240 源，无 720p 档
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    const { sessionId } = (await create.json()) as { sessionId: string };
+    const res = await fetch(`${server.url}/api/sessions/${sessionId}/stream?start=0&quality=720p`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain('320x240');
+  });
+
   test('静态服务覆盖 public/（demo 页）', async () => {
     server = await startServer({ port: 0 });
     const demo = await fetch(`${server.url}/index.html`);
@@ -171,6 +185,10 @@ describe('startServer 本进程模式', () => {
     // 依赖本任务建立的构建链产出 dist/client/player.html
     const player = await fetch(`${server.url}/player.html`);
     expect(player.ok).toBe(true);
-    expect(await player.text()).toContain('player-entry');
+    // 断言构建产物特征（带 hash 的 /assets/player-*.js 引用）而非源码模板的
+    // ./player-entry.ts——若命中后者，说明静态服务指向了未编译的前端源码目录
+    const html = await player.text();
+    expect(html).toContain('/assets/player-');
+    expect(html).not.toContain('player-entry.ts');
   });
 });
