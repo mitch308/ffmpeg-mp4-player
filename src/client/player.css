@@ -1,4 +1,7 @@
-/* src/client/player.css — 播放器样式（Task 9/10 分主题补全；当前仅外壳） */
+/* src/client/player.css — 播放器样式。
+   移植自 etsme-h5 video-preview：VideoPlayer.vue（外壳/显隐）、WebPlayer.vue（画面比例
+   容器查询）、PCController.vue（.ui-pc）、TVController.vue（.ui-tv）。 */
+
 html, body {
   margin: 0;
   width: 100%;
@@ -7,8 +10,445 @@ html, body {
   background: #000;
 }
 
+.hidden { display: none !important; }
+
+/* ===== 外壳（VideoPlayer.vue）===== */
 .video-player {
   width: 100%;
   height: 100%;
   position: relative;
+  color: #fff;
+  font-size: 14px;
+  user-select: none;
 }
+
+.video-player-layer {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+}
+
+/* 视频区（WebPlayer.vue：容器查询实现画面比例 contain 效果） */
+.player {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  container-name: video-player;
+}
+.video {
+  isolation: isolate;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+.video.radio-16-9 {
+  aspect-ratio: 16 / 9;
+  max-width: 100%; max-height: 100%;
+  object-fit: fill;
+}
+.video.radio-4-3 {
+  aspect-ratio: 4 / 3;
+  max-width: 100%; max-height: 100%;
+  object-fit: fill;
+}
+/* 容器查询：基于父容器尺寸实现 contain 效果（宽窄边决定缩放基准） */
+@container video-player (max-aspect-ratio: 16/9) {
+  .video.radio-16-9 { width: 100%; height: auto; }
+}
+@container video-player (min-aspect-ratio: 16/9) {
+  .video.radio-16-9 { width: auto; height: 100%; }
+}
+@container video-player (max-aspect-ratio: 4/3) {
+  .video.radio-4-3 { width: 100%; height: auto; }
+}
+@container video-player (min-aspect-ratio: 4/3) {
+  .video.radio-4-3 { width: auto; height: 100%; }
+}
+
+/* 顶部标题栏（毛玻璃渐变） */
+.video-player-header {
+  overflow: hidden;
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  z-index: 3;
+  backdrop-filter: blur(90px);
+  transition: all 0.3s ease;
+  background: linear-gradient(90deg, rgba(123, 123, 155, 0.5) 0%, rgba(42, 42, 53, 0.5) 100%);
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+.video-player-title {
+  font-size: 15px;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* loader（VideoPlayer.vue：蓝色圆环） */
+.loader {
+  position: absolute;
+  left: 50%; top: 50%;
+  z-index: 5;
+  width: 48px; height: 48px;
+  border: 5px solid #59b9ff;
+  border-bottom-color: transparent;
+  border-radius: 50%;
+  box-sizing: border-box;
+  animation: player-rotation 1s linear infinite;
+  pointer-events: none;
+}
+@keyframes player-rotation {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* 错误覆盖层 */
+.player-error {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  color: #59b9ff;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+/* ===== 控制栏共享骨架（TV 基准，PC 覆盖）===== */
+.video-player-controller {
+  --player-bar-height: 10px;
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  z-index: 4;
+  transition: all 0.3s ease;
+  background: rgba(51, 51, 51, 0.9);
+  height: var(--footer-height);
+}
+
+.video-player-controller.is-hidden,
+.video-player-header.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ff-player-controller-main > div {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+/* 进度条 */
+.player-bar-wrap {
+  position: relative;
+  cursor: pointer;
+  width: 100%;
+  height: var(--player-bar-height);
+}
+.player-bar-wrap:hover .player-bar .player-played .player-thumb { transform: scale(1); }
+.player-bar-time {
+  position: absolute;
+  top: -40px;
+  border-radius: 4px;
+  padding: 5px 7px;
+  background-color: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.1s ease-in-out;
+  z-index: 2;
+  pointer-events: none;
+}
+.player-bar-time.player-bar-time-active { opacity: 1; }
+.player-bar {
+  position: relative;
+  height: var(--player-bar-height);
+  width: 100%;
+  background: rgba(255, 255, 255, 0.26);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.player-buffer-time {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  height: var(--player-bar-height);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.player-played {
+  background: #59b9ff;
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  height: var(--player-bar-height);
+  border-radius: 2px;
+  will-change: width;
+}
+.player-thumb {
+  position: absolute;
+  top: -4px; right: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s ease-in-out;
+  transform: scale(0);
+  background: rgba(89, 185, 255, 0.24);
+}
+.player-thumb > span {
+  height: calc(var(--player-bar-height) + 8px);
+  width: calc(var(--player-bar-height) + 8px);
+  background: #59b9ff;
+  border-radius: 50%;
+}
+.player-thumb.player-thumb-active { transform: scale(1); }
+
+/* 图标按钮（TV 基准尺寸） */
+.icon-play-box, .icon-pause-box, .icon-muted-box, .icon-unmuted-box,
+.more-config-box, .fullscreen-box {
+  font-size: 30px;
+  padding: 20px 14px;
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+}
+.icon { display: inline-flex; }
+
+.ff-player-time { font-weight: 400; color: #fff; }
+.ff-player-time-split { color: #fff; }
+
+/* 倍速/画质文字按钮（TV 基准） */
+.playback-rate, .quality {
+  height: 100%;
+  padding: 0 14px;
+  line-height: 1;
+  font-size: 20px;
+  color: #fff;
+  cursor: pointer;
+}
+
+/* 音量条（TV 基准） */
+.player-volume { display: flex; align-items: center; cursor: pointer; height: 100%; }
+.player-volume-bar-wrap { display: flex; align-items: center; height: 60px; width: 200px; }
+.player-volume-bar {
+  display: flex; align-items: center;
+  width: 100%;
+  height: var(--player-bar-height);
+  background: rgba(255, 255, 255, 0.26);
+  border-radius: 2px;
+  transition: all 0.3s ease-in-out;
+}
+.player-volume-bar-inner {
+  position: relative;
+  background: #fff;
+  height: 100%;
+  transition: all 0.1s ease;
+  will-change: width;
+  border-radius: 2px;
+}
+.player-vol-thumb {
+  position: absolute;
+  top: -4px;
+  right: calc((var(--player-bar-height) + 8px) / 2 * -1);
+  height: calc(var(--player-bar-height) + 8px);
+  width: calc(var(--player-bar-height) + 8px);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s ease-in-out;
+  background: #fff;
+}
+.player-vol-thumb-tips {
+  position: relative;
+  top: -40px; left: -15px;
+  border-radius: 4px;
+  padding: 5px 7px;
+  width: 40px;
+  background-color: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.1s ease-in-out;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* ext 面板列表（TV 基准；共享） */
+.ext { overflow: hidden; }
+.ext-title {
+  margin: 0;
+  font-weight: 400;
+  padding-top: 14px;
+  font-size: 30px;
+  color: #fff;
+  text-align: center;
+}
+.ext-title::after {
+  display: block;
+  content: '';
+  width: 100%;
+  height: 1px;
+  margin-top: 14px;
+  background: #606060;
+  transform: scaleY(0.5);
+}
+.ext-back {
+  position: absolute;
+  top: 0; right: 0;
+  font-size: 30px;
+  padding: 14px 30px;
+  cursor: pointer;
+  color: #fff;
+}
+.driver {
+  position: absolute;
+  bottom: 0; left: 0;
+  width: 100%; height: 1px;
+  background: #606060;
+  transform: scaleY(0.5);
+}
+.quality-list, .playback-rate-list, .radio-list, .decode-list { padding: 20px; }
+.quality-list span {
+  margin: 12px auto;
+  padding-left: 12px;
+  display: block;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  font-size: 14px;
+  color: #fff;
+  cursor: pointer;
+}
+.quality-list span.active { background: rgba(71, 155, 255, 0.33); }
+.playback-rate-list span, .radio-list span, .decode-list span {
+  margin: 0 14px 14px 0;
+  display: inline-block;
+  padding: 24px 44px;
+  font-size: 24px;
+  text-align: center;
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.playback-rate-list span:hover, .radio-list span:hover, .decode-list span:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.playback-rate-list span.active, .radio-list span.active, .decode-list span.active {
+  background: rgba(71, 155, 255, 0.33);
+}
+.config-title {
+  padding-left: 13px;
+  font-weight: 400;
+  font-size: 30px;
+  color: #fff;
+}
+.config-content { padding: 20px 0; }
+
+/* ===== TV 主题（TVController.vue）：通栏大字号 ===== */
+.ui-tv {
+  --header-height: 88px;
+  --footer-height: 170px;
+}
+.ui-tv .ext {
+  position: absolute;
+  bottom: var(--footer-height);
+  left: 0; right: 0;
+  background-color: rgba(51, 51, 51, 0.9);
+}
+.ui-tv .first-row { justify-content: space-between; }
+.ui-tv .time-l, .ui-tv .time-r { display: none; }
+.ui-tv .second-row { justify-content: space-between; }
+.ui-tv .center {
+  width: 30%;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+}
+.ui-tv .ff-player-time { font-size: 34px; }
+.ui-tv .ff-player-time-split { font-size: 28px; }
+.ui-tv .fullscreen-box { display: none; } /* TVController 无全屏按钮 */
+
+/* ===== PC 主题（PCController.vue）：520px 悬浮条 ===== */
+.ui-pc {
+  --header-height: 48px;
+  --footer-height: auto;
+}
+.ui-pc .video-player-controller {
+  --player-bar-height: 4px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  bottom: 53px;
+  width: 520px;
+  height: auto;
+  border-radius: 6px;
+}
+.ui-pc .ff-player-controller-main > div { padding: 0 16px; }
+.ui-pc .first-row {
+  margin-top: 13px;
+  justify-content: space-between;
+  width: 100%;
+}
+.ui-pc .ff-player-time { width: 58px; font-size: 14px; }
+.ui-pc .second-row { margin: 13px 0; justify-content: space-between; }
+.ui-pc .center { display: none; }
+.ui-pc .icon-play-box, .ui-pc .icon-pause-box, .ui-pc .icon-muted-box,
+.ui-pc .icon-unmuted-box, .ui-pc .more-config-box, .ui-pc .fullscreen-box {
+  font-size: 20px;
+  padding: 0;
+}
+.ui-pc .icon-play-box, .ui-pc .icon-pause-box { margin-right: 12px; }
+.ui-pc .playback-rate, .ui-pc .quality { height: auto; font-size: 14px; padding: 0; }
+.ui-pc .playback-rate { margin-right: 16px; }
+.ui-pc .quality { margin-right: 24px; }
+.ui-pc .more-config-box { margin-right: 16px; font-size: 18px; }
+.ui-pc .fullscreen-box { font-size: 20px; }
+/* 音量（PC：细条小 thumb） */
+.ui-pc .player-volume-bar-wrap { margin-left: 10px; height: 100%; width: 95px; }
+.ui-pc .player-vol-thumb { top: -2px; right: -4px; height: 8px; width: 8px; }
+/* ext 面板：条内部展开 */
+.ui-pc .ext {
+  position: relative;
+  background: transparent;
+  height: 0;
+  transition: height 0.3s ease-in-out;
+}
+.ui-pc .ext-title {
+  height: 32px;
+  line-height: 32px;
+  padding-top: 0;
+  font-size: 14px;
+}
+.ui-pc .ext-title::after { margin-top: 0; }
+.ui-pc .ext-back { top: 4px; right: 8px; font-size: 18px; padding: 4px 10px; }
+.ui-pc .quality-list span {
+  width: 472px;
+  height: 36px;
+  line-height: 36px;
+  margin: 12px auto;
+}
+.ui-pc .playback-rate-list span, .ui-pc .radio-list span, .ui-pc .decode-list span {
+  margin: 0 14px 16px 0;
+  width: 85px;
+  height: 28px;
+  line-height: 28px;
+  padding: 0;
+  font-size: 14px;
+  text-align: center;
+}
+.ui-pc .config-title { font-size: 14px; margin: 16px 0 -8px 0; }
+.ui-pc .config-title.decode-title { margin-top: 24px; }
+.ui-pc .config-content { padding: 0 0 12px 0; }
+.ui-pc .driver { display: none; }
+.ui-pc .player-thumb { top: -6px; right: -8px; height: 16px; width: 16px; }
+.ui-pc .player-thumb > span { width: 10px; height: 10px; }
