@@ -111,7 +111,7 @@ test('可用档位：只展示严格低于源高度的档位 + 原画质（降�
   assert.deepStrictEqual(availableQualities(probe()), ['720p', 'origin']);           // 1080 源：720p 严格更低
   assert.deepStrictEqual(availableQualities(probe({ width: 1280, height: 720 })), ['origin']); // 720 源无更低档
   assert.deepStrictEqual(availableQualities(probe({ width: 640, height: 360 })), ['origin']);
-  assert.deepStrictEqual(availableQualities(probe({ width: 2560, height: 1440 })), ['720p', 'origin']); // 1440 源不含 2k
+  assert.deepStrictEqual(availableQualities(probe({ width: 2560, height: 1440 })), ['1080p', '720p', 'origin']); // 1440 源不含 2k（严格低于）
 });
 
 test('缩放尺寸：等比、偶数对齐、不放大', () => {
@@ -255,7 +255,7 @@ test('不带 opts 时行为与旧版完全一致（回归）', () => {
   assert.strictEqual(chain.length, 2);
   assert.strictEqual(chain[0].label, 'copy');
   assert.strictEqual(chain[1].encoder, 'h264_nvenc');
-  assert.strictEqual((chain[1] as any).scale, undefined);
+  assert.ok((chain[1] as any).scale == null, 'origin 转码无缩放（null/undefined 均可）');
 });
 
 test('origin + auto 显式传入同样保持旧行为', () => {
