@@ -1,5 +1,8 @@
 {
   "$schema": "https://unpkg.com/release-it/schema/release-it.json",
+  "hooks": {
+    "before:init": "git merge --no-edit master || (git merge --abort && exit 1)"
+  },
   "git": {
     "commitMessage": "chore(release): v${version}",
     "tagName": "v${version}",
