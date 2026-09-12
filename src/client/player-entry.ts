@@ -5,7 +5,7 @@
 //   ui       pc | tv（默认 pc）
 //   quality  初始画质档 origin|720p|1080p|2k（默认 origin）
 //   mode     解码模式 auto|hw|sw（默认 auto）
-//   autoplay 1（默认）| 0；浏览器策略限制下先静音自动播放，用户点音量解除
+//   autoplay 1（默认）| 0；注意浏览器无手势策略可能拦截自动播放
 import { PlayerCore, type ModeId, type PlayerCoreCallbacks, type QualityId } from './player-core';
 import { mountPlayerUI } from './player-ui';
 import './player.css';
@@ -42,10 +42,6 @@ async function main(): Promise<void> {
     return;
   }
   spinner.classList.add('hidden');
-
-  // 自动播放策略：默认先静音自动播放（规避浏览器无手势限制），
-  // 用户点音量图标（UI 内 unmute → video.muted=false）即恢复声音
-  if (autoplay) core.video.muted = true;
 
   mountPlayerUI({ root: app, core, callbacks, title, ui });
   core.start(0, autoplay);

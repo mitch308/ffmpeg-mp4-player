@@ -253,9 +253,9 @@ html, body {
 }
 
 /* 音量条（TV 基准） */
-/* 手势指针只给内部可点元素（图标盒已有 cursor:pointer），容器与音量条用默认光标 */
+/* 手势指针只给内部可点元素（图标盒已有 cursor:pointer），容器用默认光标 */
 .player-volume { display: flex; align-items: center; height: 100%; }
-.player-volume-bar-wrap { display: flex; align-items: center; height: 60px; width: 200px; }
+.player-volume-bar-wrap { display: flex; align-items: center; height: 60px; width: 200px; cursor: pointer; }
 .player-volume-bar {
   display: flex; align-items: center;
   width: 100%;
@@ -263,6 +263,7 @@ html, body {
   background: rgba(255, 255, 255, 0.26);
   border-radius: 2px;
   transition: all 0.3s ease-in-out;
+  cursor: pointer;
 }
 .player-volume-bar-inner {
   position: relative;
