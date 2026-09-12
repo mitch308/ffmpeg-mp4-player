@@ -10,6 +10,12 @@ html, body {
   background: #000;
 }
 
+/* 全局 border-box：参考组件运行在 etsme-h5 的全局重置环境，
+   移植的尺寸（width + padding 组合）均隐含此前提 */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 .hidden { display: none !important; }
 
 /* ===== 外壳（VideoPlayer.vue）===== */
