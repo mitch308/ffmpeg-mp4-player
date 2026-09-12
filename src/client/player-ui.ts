@@ -1,7 +1,7 @@
 // src/client/player-ui.ts — 播放器控制栏 UI（PC/TV 双主题，同 DOM 不同 CSS）。
 // 交互逻辑与视觉值移植自 etsme-h5 video-preview 组件：
 // - 显隐：200ms 节流 mousemove 显示；播放中 3s 隐藏；5s 无操作隐藏；暂停常显
-// - 单击画面切控制栏 / 双击切播放（260ms 双击判定，等价 useClickHandler）
+// - 单击画面切播放/暂停、双击切全屏（260ms 双击判定；按需求偏离参考组件）
 // - ext 面板：画质 / 倍速 / 更多设置（画面比例 + 解码设置）
 // - 拖拽进度条仅 UI 预览，松手才 seek（服务端 seek 成本高，与参考组件的有意差异）
 import { injectIcon, type IconName } from './icons';
@@ -298,28 +298,22 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
     }, MOUSE_MOVE_THROTTLE);
   };
 
-  // 单击切控制栏显隐 / 双击切播放（等价参考组件 useClickHandler）
+  // 单击切播放/暂停、双击切全屏（画面区域，260ms 双击判定；
+  // 按需求偏离参考组件的"单击切控制栏/双击切播放"）
   let clickTimer: number | null = null;
   layer.addEventListener('click', () => {
     if (clickTimer != null) {
       clearTimeout(clickTimer);
       clickTimer = null;
-      // 双击：切播放
-      if (video.paused) void video.play().catch(() => { /* 被阻止 */ });
-      else video.pause();
+      // 双击：切全屏
+      toggleFullScreen();
       return;
     }
     clickTimer = window.setTimeout(() => {
       clickTimer = null;
-      // 单击：切换控制栏
-      if (!controlsVisible) {
-        showControlsNow();
-        scheduleHide();
-      } else {
-        controlsVisible = false;
-        applyVisibility();
-        clearHideTimer();
-      }
+      // 单击：切播放/暂停
+      if (video.paused) void video.play().catch(() => { /* 被阻止 */ });
+      else video.pause();
     }, DBLCLICK_MS);
   });
   layer.addEventListener('mousemove', handleMouseMove);
@@ -352,8 +346,11 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
 
   // ===== 列表构建 =====
 
-  // 画质（服务端已按源分辨率过滤，降序；origin 恒在末位）
-  for (const q of core.meta.qualities) {
+  // 画质（展示从低到高、原画质最后；服务端返回为降序，origin 恒在末位）
+  // 显式标注 QualityId[]：TS 5.5+ 会从 filter 谓词窄化掉 origin，push 时报错
+  const qualityOrder: QualityId[] = core.meta.qualities.filter(q => q !== 'origin').reverse();
+  qualityOrder.push('origin');
+  for (const q of qualityOrder) {
     const span = document.createElement('span');
     span.textContent = QUALITY_LABELS[q] ?? q;
     span.dataset.q = q;
@@ -476,10 +473,11 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
 
   // ===== 全屏（PC 主题；TV 无此按钮，CSS 隐藏）=====
 
-  $('.fullscreen-box').addEventListener('click', () => {
+  function toggleFullScreen(): void {
     const fs = document.fullscreenElement ? document.exitFullscreen() : root.requestFullscreen();
     fs.catch(() => { /* 拒绝/不支持 */ });
-  });
+  }
+  $('.fullscreen-box').addEventListener('click', toggleFullScreen);
   document.addEventListener('fullscreenchange', () => {
     injectIcon(fullscreenIcon, document.fullscreenElement ? 'fullscreen-exit' : 'fullscreen');
   });

@@ -253,7 +253,8 @@ html, body {
 }
 
 /* 音量条（TV 基准） */
-.player-volume { display: flex; align-items: center; cursor: pointer; height: 100%; }
+/* 手势指针只给内部可点元素（图标盒已有 cursor:pointer），容器与音量条用默认光标 */
+.player-volume { display: flex; align-items: center; height: 100%; }
 .player-volume-bar-wrap { display: flex; align-items: center; height: 60px; width: 200px; }
 .player-volume-bar {
   display: flex; align-items: center;
