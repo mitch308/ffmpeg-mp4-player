@@ -147,6 +147,15 @@ html, body {
   align-items: center;
 }
 
+/* 第二行左右分组：.left/.right 是 .second-row 的子容器，须自身成 flex 行，
+   否则内部块级子元素（图标盒/音量/倍速/画质等）纵向堆叠 */
+.second-row .left,
+.second-row .right {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
 /* 进度条 */
 .player-bar-wrap {
   position: relative;
