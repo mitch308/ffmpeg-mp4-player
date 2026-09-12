@@ -408,9 +408,9 @@ html, body {
   justify-content: space-between;
   width: 100%;
 }
-.ui-pc .ff-player-time { width: 58px; font-size: 14px; flex: none; }
-/* 进度条固定宽度（参照 PCController.vue 347px），与两侧时间靠 space-between 留出间距 */
-.ui-pc .player-bar-wrap { width: 347px; flex: none; }
+/* 时间自适应宽度（58px 装不下 00:05:11 会溢出），进度条占余量、固定小间距 */
+.ui-pc .ff-player-time { font-size: 14px; flex: none; white-space: nowrap; }
+.ui-pc .player-bar-wrap { flex: 1; width: auto; min-width: 0; margin: 0 10px; }
 .ui-pc .second-row { margin: 13px 0; justify-content: space-between; }
 .ui-pc .center { display: none; }
 .ui-pc .icon-play-box, .ui-pc .icon-pause-box, .ui-pc .icon-muted-box,
