@@ -122,6 +122,8 @@ export class PlayerCore {
   /** 从给定 start 秒建立 MediaSource 并拉流（首次加载入口） */
   start(startAt = 0, autoplay = true): void {
     this.autoPlay = autoplay;
+    // 首次加载到 canplay 前显示 loading（与 seek/换档同路径；canplay 统一回调关闭）
+    this.cb.onLoading?.(true);
     this.startStreamAt(startAt);
   }
 

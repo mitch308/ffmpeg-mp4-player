@@ -6,6 +6,8 @@
 //   quality  初始画质档 origin|720p|1080p|2k（默认 origin）
 //   mode     解码模式 auto|hw|sw（默认 auto）
 //   autoplay 1（默认）| 0；注意浏览器无手势策略可能拦截自动播放
+//   volume   初始音量：0~1（小数）或 1~100（百分数），默认 1
+//   mute     1 静音起播（默认 0）
 import { PlayerCore, type ModeId, type PlayerCoreCallbacks, type QualityId } from './player-core';
 import { mountPlayerUI } from './player-ui';
 import './player.css';
@@ -23,6 +25,8 @@ async function main(): Promise<void> {
   const ui = params.get('ui') === 'tv' ? 'tv' : 'pc';
   const title = params.get('title') ?? '';
   const autoplay = params.get('autoplay') !== '0';
+  const volume = parseVolume(params.get('volume'));
+  const mute = params.get('mute') === '1';
   const quality = parseParam<QualityId>(params.get('quality'), ['origin', '720p', '1080p', '2k']) ?? 'origin';
   const mode = parseParam<ModeId>(params.get('mode'), ['auto', 'hw', 'sw']) ?? 'auto';
 
@@ -43,8 +47,23 @@ async function main(): Promise<void> {
   }
   spinner.classList.add('hidden');
 
+  // 初始音量/静音：在 mountPlayerUI 之前设置，让首次 renderVolume 即反映正确状态
+  if (volume !== null) {
+    core.video.volume = volume;
+    core.video.muted = volume === 0;
+  }
+  if (mute) core.video.muted = true;
+
   mountPlayerUI({ root: app, core, callbacks, title, ui });
   core.start(0, autoplay);
+}
+
+function parseVolume(v: string | null): number | null {
+  if (v === null || v === '') return null;
+  const n = Number(v);
+  if (!isFinite(n) || n < 0) return null;
+  // ≤1 按小数音量（0~1），>1 按百分数（1~100）
+  return n <= 1 ? Math.min(n, 1) : Math.min(n, 100) / 100;
 }
 
 function parseParam<T extends string>(v: string | null, allowed: readonly T[]): T | null {
