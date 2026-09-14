@@ -7,11 +7,13 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
+import { configureLogger, emitRaw, type LogLevel } from './lib/logger';
 import { destroyAllSessions } from './lib/session-manager';
 import { pickFreePort } from './lib/ports';
 import { killProcessTree } from './lib/kill-tree';
 import { createApp } from './server';
 import { PlayerServer, PlayerServerOptions, DEFAULT_HOST } from './config';
+import { log } from './lib/logger';
 
 export type { PlayerServer, PlayerServerOptions } from './config';
 
@@ -63,7 +65,7 @@ export async function startInProcess(options: PlayerServerOptions): Promise<Play
       // port 为 0 表示由 OS 分配临时端口：回读实际绑定端口，
       // 返回的 port/url 必须反映真实端口（否则调用方拿到 0 无法访问）
       const boundPort = (server.address() as AddressInfo).port;
-      console.log(`ffmpeg-mp4-player 运行于 http://${host}:${boundPort}`);
+      log.info('server', `运行于 http://${host}:${boundPort}`);
       return {
         port: boundPort,
         url: `http://${host}:${boundPort}`,
@@ -111,9 +113,17 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
   try {
     const port = await new Promise<number>((resolve, reject) => {
       const onMessage = (msg: unknown) => {
-        const m = msg as { type?: string; port?: number; message?: string };
+        const m = msg as { type?: string; port?: number; message?: string; level?: string };
         if (m?.type === 'ready' && typeof m.port === 'number') resolve(m.port);
         else if (m?.type === 'error') reject(new Error(m.message ?? '子进程启动失败'));
+        else if (m?.type === 'log') {
+          // 子进程日志经 IPC 转发：走本进程配置的日志出口（自定义函数或默认 console）。
+          // IPC 保序，且子进程 '运行于' 日志先于 ready 发出，resolve 时已送达
+          emitRaw(
+            m.level === 'warn' || m.level === 'error' ? (m.level as LogLevel) : 'info',
+            typeof m.message === 'string' ? m.message : ''
+          );
+        }
       };
       child.on('message', onMessage);
       child.once('exit', (code) =>
@@ -121,7 +131,7 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
       );
     });
     const host = options.host ?? DEFAULT_HOST;
-    console.log(`ffmpeg-mp4-player（子进程模式）运行于 http://${host}:${port}`);
+    log.info('server', `（子进程模式）运行于 http://${host}:${port}`);
     return {
       port,
       url: `http://${host}:${port}`,
@@ -141,6 +151,10 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
  * 启动前先解析 ffmpeg/ffprobe 路径（缺失立即抛错，不留半启动状态）。
  */
 export async function startServer(options: PlayerServerOptions = {}): Promise<PlayerServer> {
+  // 日志收口：注入自定义日志函数（不传复位为默认 console）；须最先配置，
+  // 使后续路径校验/启动过程的日志都走同一出口
+  configureLogger(options.logger);
+
   // 显式配置的路径是硬契约：路径不可用时立即报错。
   // 解析链对无效路径会静默降级到下一级（环境变量/static 包，devDeps 装了 static 包就能解析成功），
   // 但调用方明确传入的路径失效属于配置错误，不能悄悄换用别的来源
@@ -149,6 +163,7 @@ export async function startServer(options: PlayerServerOptions = {}): Promise<Pl
     ['ffprobePath', options.ffprobePath]
   ] as const) {
     if (p != null && !isExecutable(p)) {
+      log.error('server', `配置的 ${name} 不可用（文件不存在或不可执行）: ${p}`);
       throw new Error(`配置的 ${name} 不可用（文件不存在或不可执行）: ${p}`);
     }
   }

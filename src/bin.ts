@@ -1,6 +1,7 @@
 // src/bin.ts — CLI 入口：npx ffmpeg-mp4-player 即起服务
 // 库模式（被 import）不注册信号处理，信号交给宿主；仅 CLI 自己处理
 import { startServer } from './index';
+import { log } from './lib/logger';
 
 function parseArgs(argv: string[]): { port?: number; host?: string } {
   const out: { port?: number; host?: string } = {};
@@ -19,13 +20,13 @@ async function main(): Promise<void> {
     ffmpegPath: process.env.FFMPEG_PATH,
     ffprobePath: process.env.FFPROBE_PATH
   });
-  console.log(`ffmpeg-mp4-player 运行于 ${server.url}（Ctrl+C 停止）`);
+  log.info('bin', `运行于 ${server.url}（Ctrl+C 停止）`);
 
   let stopping = false;
   const shutdown = async (signal: string) => {
     if (stopping) return;
     stopping = true;
-    console.log(`收到 ${signal}，正在停止…`);
+    log.info('bin', `收到 ${signal}，正在停止…`);
     await server.stop();
     process.exit(0);
   };
@@ -34,6 +35,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: Error) => {
-  console.error(`启动失败: ${err.message}`);
+  log.error('bin', `启动失败: ${err.message}`);
   process.exit(1);
 });

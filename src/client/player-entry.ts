@@ -10,6 +10,7 @@
 //   mute     1 静音起播（默认 0）
 import { PlayerCore, type ModeId, type PlayerCoreCallbacks, type QualityId } from './player-core';
 import { mountPlayerUI } from './player-ui';
+import { clientLog } from './logger';
 import './player.css';
 
 async function main(): Promise<void> {
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
   try {
     core = await PlayerCore.create(url, { quality, mode }, callbacks);
   } catch (e) {
+    clientLog.error('player', `会话创建失败: ${(e as Error).message}`);
     spinner.classList.add('hidden');
     app.textContent = '加载失败: ' + (e as Error).message;
     return;

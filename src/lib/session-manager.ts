@@ -3,6 +3,7 @@ import { createFfmpegProcess } from './ffmpeg-process';
 import { probe } from './ffprobe';
 import { getCaps } from './hw-accel';
 import { strategyChain } from './stream-strategy';
+import { log } from './logger';
 import type { Caps } from './hw-accel';
 import { type QualityId, type TranscodeMode } from './quality';
 import type { ProbeResult } from './ffprobe';
@@ -116,6 +117,7 @@ export function startStream(
     url: session.url,
     startTime,
     strategy,
+    sessionId: session.id,
     onData: (chunk) => {
       if (session.process !== proc) return; // 已被降级/替换的旧进程
       bytesEmitted += chunk.length;
@@ -125,9 +127,9 @@ export function startStream(
       if (session.process !== proc) return;
       if (bytesEmitted === 0 && session.chainIndex < session.chain.length - 1) {
         session.chainIndex++;
-        console.warn(
-          `[session ${session.id}] 策略 ${strategy.label} 失败` +
-          `(${String(err.message).slice(0, 120)})，降级为 ${currentStrategy(session).label}`
+        log.warn(
+          `session:${session.id}`,
+          `策略 ${strategy.label} 失败（${String(err.message).slice(0, 120)}），降级为 ${currentStrategy(session).label}`
         );
         startStream(session, startTime, onData, onError, onExit, opts);
         return;
@@ -162,8 +164,9 @@ export function stopStream(session: Session): void {
 /**
  * 销毁会话
  * @param {string} id
+ * @param {string} [reason] - 销毁原因（客户端请求/空闲超时/服务停止），仅用于日志
  */
-export function destroySession(id: string): void {
+export function destroySession(id: string, reason?: string): void {
   const session = sessions.get(id);
   if (!session) return;
   stopStream(session);
@@ -171,12 +174,13 @@ export function destroySession(id: string): void {
     clearTimeout(session.timeoutId);
   }
   sessions.delete(id);
+  log.info(`session:${id}`, `销毁${reason ? `（${reason}）` : ''}`);
 }
 
 /** 销毁全部会话（stop() 生命周期调用）：杀掉所有 ffmpeg 进程并清空 Map */
 export function destroyAllSessions(): void {
   for (const id of Array.from(sessions.keys())) {
-    destroySession(id);
+    destroySession(id, '服务停止');
   }
 }
 
@@ -209,7 +213,7 @@ function scheduleCleanup(session: Session): void {
       scheduleCleanup(session); // 重新计时
       return;
     }
-    destroySession(session.id);
+    destroySession(session.id, '空闲超时');
   }, SESSION_TIMEOUT_MS);
   // 清理定时器不应阻止进程退出（HTTP 监听器已维持事件循环）
   session.timeoutId.unref && session.timeoutId.unref();

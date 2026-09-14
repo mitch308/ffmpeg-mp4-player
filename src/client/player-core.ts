@@ -9,6 +9,11 @@
 // - pumpReader 水位线（45s 暂停 / 15s 恢复）不能删：转码快于实时，无水位线会
 //   撑爆 MSE 配额 → QuotaExceededError 静默丢 chunk → buffered 空洞永久卡死。
 // - 流中断走自动恢复（连续 4 次失败才报错）：长片瞬时网络抖动是常态。
+//
+// 日志：经 client/logger.ts 双通道输出（console + 上报 /api/logs 服务端统一落盘），
+// 统一前缀 [fmp4][player:<sessionId>]，与服务端日志按会话串联。
+
+import { clientLog } from './logger';
 
 export type QualityId = 'origin' | '720p' | '1080p' | '2k';
 export type ModeId = 'auto' | 'hw' | 'sw';
@@ -76,6 +81,7 @@ export class PlayerCore {
 
   private cb: PlayerCoreCallbacks;
   private gen = 0;                 // 代次令牌，使在途异步操作失效
+  private logTag: string;          // 日志标签：player:<sessionId>
   private mediaSource: MediaSource | null = null;
   private sourceBuffer: SourceBuffer | null = null;
   private objectURL: string | null = null;
@@ -92,6 +98,7 @@ export class PlayerCore {
     this.quality = quality;
     this.mode = mode;
     this.cb = cb;
+    this.logTag = 'player:' + meta.sessionId;
     this.video = document.createElement('video');
     this.video.preload = 'auto';
     this.bindVideoEvents();
@@ -114,6 +121,12 @@ export class PlayerCore {
       throw new Error(err.error || 'HTTP ' + resp.status);
     }
     const meta = await resp.json() as SessionMeta;
+    clientLog.info(
+      'player:' + meta.sessionId,
+      `会话创建 ${meta.width}x${meta.height} codec=${meta.codec}/${meta.pixFmt}` +
+      ` audio=${meta.audioCodec ?? '无'} strategy=${meta.streamMode}(${meta.encoder ?? '-'})` +
+      ` quality=${opts.quality ?? 'origin'} mode=${opts.mode ?? 'auto'} duration=${meta.duration}s`
+    );
     return new PlayerCore(meta, opts.quality ?? 'origin', opts.mode ?? 'auto', cb);
   }
 
@@ -122,6 +135,7 @@ export class PlayerCore {
   /** 从给定 start 秒建立 MediaSource 并拉流（首次加载入口） */
   start(startAt = 0, autoplay = true): void {
     this.autoPlay = autoplay;
+    clientLog.info(this.logTag, `起播 start=${startAt}s autoplay=${autoplay}`);
     // 首次加载到 canplay 前显示 loading（与 seek/换档同路径；canplay 统一回调关闭）
     this.cb.onLoading?.(true);
     this.startStreamAt(startAt);
@@ -140,6 +154,7 @@ export class PlayerCore {
     if (!changed) return;
     const t = this.video.currentTime;
     const wasPlaying = !this.video.paused && !this.video.ended;
+    clientLog.info(this.logTag, `切换画质/解码 quality=${quality} mode=${mode} 从 ${t}s 继续`);
     this.teardownMediaSource();
     this.autoPlay = wasPlaying;
     this.cb.onStatus?.('正在切换…');
@@ -150,6 +165,7 @@ export class PlayerCore {
   /** 销毁：断流 + 删除服务端会话 */
   async destroy(): Promise<void> {
     this.destroyed = true;
+    clientLog.info(this.logTag, `销毁（播放位置 ${this.video.currentTime}s）`);
     window.removeEventListener('beforeunload', this.onBeforeUnload);
     this.teardownMediaSource();
     try {
@@ -183,6 +199,7 @@ export class PlayerCore {
   private startStreamAt(start: number): void {
     const myGen = this.gen;
     const codec = pickCodec(!!this.meta.audioCodec);
+    clientLog.info(this.logTag, `建流 start=${start}s codec=${codec}`);
 
     this.rebuilding = true;
     const ms = new MediaSource();
@@ -202,8 +219,7 @@ export class PlayerCore {
         return;
       }
       this.sourceBuffer = sb;
-      sb.mode = 'segments';
-      // 关键：seek/换档重建后新 ffmpeg 流的时间戳从 0 重新起算（-ss 重置了时间线），
+      sb.mode = 'segments';      // 关键：seek/换档重建后新 ffmpeg 流的时间戳从 0 重新起算（-ss 重置了时间线），
       // 用 timestampOffset 偏移到原片位置，使 video.currentTime 恒反映原片真实位置。
       // 初始加载 start=0，offset=0 无副作用。
       try { sb.timestampOffset = start; } catch { /* 部分 SB 不支持 */ }
@@ -267,6 +283,7 @@ export class PlayerCore {
     this.networkFailStreak++;
     const resumeAt = this.video.currentTime;
     const wasPlaying = !this.video.paused && !this.video.ended;
+    clientLog.warn(this.logTag, `流中断，第 ${this.networkFailStreak}/4 次自动恢复，从 ${resumeAt}s 继续`);
     this.cb.onStatus?.('连接中断，正在从 ' + formatTime(resumeAt) + ' 恢复…');
     this.cb.onLoading?.(true);
     setTimeout(() => {
@@ -354,6 +371,7 @@ export class PlayerCore {
         // 缓冲区配额耗尽：异步移除已播放部分（currentTime 之前 20s）释放空间，
         // 把当前分片放回队头，等 remove 触发的 updateend 后自动重试
         const removeEnd = Math.max(0, this.video.currentTime - 20);
+        clientLog.warn(this.logTag, `MSE 配额耗尽，移除 ${removeEnd}s 前已播放缓冲`);
         if (sb.buffered.start(0) < removeEnd) {
           this.pendingBuffers.unshift(next);
           try { sb.remove(sb.buffered.start(0), removeEnd); }
@@ -362,6 +380,8 @@ export class PlayerCore {
           this.pumpBuffer(); // 无可移除范围：丢弃当前分片，避免死循环
         }
       } else {
+        // 其他 append 错误此前完全静默（排查"播放失败但无日志"的盲区），至少记下错误名
+        clientLog.warn(this.logTag, `appendBuffer 失败（${(e as Error).name}），丢弃该分片`);
         this.pumpBuffer(); // 其他错误：丢弃当前分片，继续排空
       }
     }
@@ -390,6 +410,7 @@ export class PlayerCore {
     const t = this.video.currentTime;
     if (this.isBufferedAt(t)) return;      // 已缓冲，交给原生播放
     // 真正拖到未缓冲区域（无论前后向）→ 结束当前 ffmpeg、从 t 精确 seek 重新转码
+    clientLog.info(this.logTag, `拖动 seek 到 ${t}s（缓冲区外，重建流）`);
     this.cb.onStatus?.('精确 seek 到 ' + formatTime(t) + ' …');
     this.cb.onLoading?.(true);
     this.teardownMediaSource();
@@ -434,6 +455,7 @@ export class PlayerCore {
   }
 
   private fail(msg: string): void {
+    clientLog.error(this.logTag, msg);
     this.cb.onLoading?.(false);
     this.cb.onError?.(msg);
   }

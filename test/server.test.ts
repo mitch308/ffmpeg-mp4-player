@@ -1,5 +1,5 @@
 // test/server.test.ts — startServer 本进程模式生命周期
-import { describe, test, expect, afterEach } from 'vitest';
+import { describe, test, expect, afterEach, vi } from 'vitest';
 import { startServer } from '../src/index';
 import { getSessionCount } from '../src/lib/session-manager';
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
@@ -178,6 +178,52 @@ describe('startServer 本进程模式', () => {
     server = await startServer({ port: 0 });
     const demo = await fetch(`${server.url}/index.html`);
     expect(demo.ok).toBe(true);
+  });
+
+  test('POST /api/logs 批量上报：前端日志经统一 logger 以 client 前缀输出', async () => {
+    const received: Array<{ level: string; message: string }> = [];
+    server = await startServer({
+      port: 0,
+      logger: (level, message) => received.push({ level, message })
+    });
+    const res = await fetch(`${server.url}/api/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entries: [
+          { level: 'info', tag: 'player:s1', message: '会话创建' },
+          { level: 'error', tag: 'player:s1', message: '播放错误' }
+        ]
+      })
+    });
+    expect(res.ok).toBe(true);
+    // 只筛 client 前缀条目（启动日志也走同一 logger，属预期）
+    const clientLogs = received.filter((r) => r.message.includes('[client '));
+    expect(clientLogs).toEqual([
+      { level: 'info', message: '[fmp4][client player:s1] 会话创建' },
+      { level: 'error', message: '[fmp4][client player:s1] 播放错误' }
+    ]);
+  });
+
+  test('POST /api/logs 非法请求体 → 400', async () => {
+    server = await startServer({ port: 0 });
+    for (const body of [null, {}, { entries: 'x' }, { entries: [] }]) {
+      const res = await fetch(`${server.url}/api/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test('startServer({ logger }) 自定义日志函数接收启动日志', async () => {
+    const received: string[] = [];
+    server = await startServer({
+      port: 0,
+      logger: (_level, message) => received.push(message)
+    });
+    expect(received.some((m) => m.includes('[fmp4][server] 运行于 http://'))).toBe(true);
   });
 
   test('dist/client/ 静态服务可访问 player.html（前端构建产物）', async () => {

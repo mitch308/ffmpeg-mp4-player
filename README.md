@@ -79,6 +79,9 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 | `ffmpegPath` | string | 解析链 | ffmpeg 可执行文件路径 |
 | `ffprobePath` | string | 解析链 | ffprobe 可执行文件路径 |
 | `staticPlayer` | boolean | `true` | 托管内置网页播放器（访问根路径） |
+| `logger` | function | console | 自定义日志函数 `(level: 'info'\|'warn'\|'error', message: string) => void`；消息带统一前缀 `[fmp4]`。子进程模式下同样生效：子进程日志经 IPC 转发回父进程由此函数输出 |
+
+日志统一以 `[fmp4][<组件>:<上下文>]` 开头（如 `[fmp4][session:abc123]`、`[fmp4][ffmpeg pid=1 session:abc123]`、`[fmp4][client ...]`），按会话 id grep 即可串联前后端全链路。前端播放器日志除浏览器 console 外，还会经 `POST /api/logs` 上报到服务端统一输出。
 
 ## HTTP API
 

@@ -54,6 +54,22 @@ describe('startServer 子进程模式', () => {
     expect(buf.subarray(4, 8).toString('ascii')).toBe('ftyp');
   });
 
+  test('自定义日志函数在子进程模式下同样生效（子进程日志经 IPC 转发）', async () => {
+    const received: Array<{ level: string; message: string }> = [];
+    server = await startServer({
+      childProcess: true,
+      port: 0,
+      logger: (level, message) => received.push({ level, message })
+    });
+    // IPC 保序且子进程的「运行于」日志先于 ready 发出：startServer 返回时必已送达。
+    // 排除父进程自己的「（子进程模式）运行于」，仅断言来自子进程的日志
+    const fromChild = received.filter(
+      (r) => r.message.includes('运行于') && !r.message.includes('（子进程模式）')
+    );
+    expect(fromChild.length).toBeGreaterThan(0);
+    expect(fromChild[0].message).toMatch(/^\[fmp4\]\[server\] 运行于 http:\/\//);
+  });
+
   test('显式 ffmpegPath 无效时 startServer 拒绝启动（父进程预校验，session 数保持 0）', async () => {
     await expect(
       startServer({ childProcess: true, ffmpegPath: 'C:/不存在的ffmpeg.exe' })
