@@ -226,6 +226,36 @@ describe('startServer 本进程模式', () => {
     expect(received.some((m) => m.includes('[fmp4][server] 运行于 http://'))).toBe(true);
   });
 
+  test('生命周期事件：start/stop 依次发出，带负载，重复 stop 只发一次', async () => {
+    const events: string[] = [];
+    let startPayload: { port: number; url: string; host: string; childProcess: boolean } | null = null;
+    server = await startServer({ port: 0 });
+    expect(server.pid).toBeNull(); // 本进程模式与宿主同进程，无子进程 pid
+    // startServer resolve 后（同一微任务续体内）挂监听：start 用 setImmediate 延迟一拍，必能收到
+    server.on('start', (p) => { events.push('start'); startPayload = { ...p }; });
+    server.on('stop', () => events.push('stop'));
+    await new Promise((r) => setImmediate(r));
+    expect(events).toEqual(['start']);
+    expect(startPayload!.port).toBe(server.port);
+    expect(startPayload!.url).toBe(server.url);
+    expect(startPayload!.host).toBe('127.0.0.1');
+    expect(startPayload!.childProcess).toBe(false);
+
+    await server.stop();
+    await server.stop(); // 重复调用幂等，stop 事件只发一次
+    expect(events).toEqual(['start', 'stop']);
+  });
+
+  test('off 取消事件监听', async () => {
+    server = await startServer({ port: 0 });
+    let called = 0;
+    const onStop = () => called++;
+    server.on('stop', onStop);
+    server.off('stop', onStop);
+    await server.stop();
+    expect(called).toBe(0);
+  });
+
   test('dist/client/ 静态服务可访问 player.html（前端构建产物）', async () => {
     server = await startServer({ port: 0 });
     // 依赖本任务建立的构建链产出 dist/client/player.html

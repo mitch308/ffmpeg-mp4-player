@@ -66,18 +66,26 @@ export async function startInProcess(options: PlayerServerOptions): Promise<Play
       // 返回的 port/url 必须反映真实端口（否则调用方拿到 0 无法访问）
       const boundPort = (server.address() as AddressInfo).port;
       log.info('server', `运行于 http://${host}:${boundPort}`);
-      return {
-        port: boundPort,
-        url: `http://${host}:${boundPort}`,
-        stop: async () => {
-          // 先销毁会话再关闭监听：活跃流会话的 HTTP 响应会钉住连接，
-          // 而 closeServer 要等所有连接结束；destroyAllSessions 又只在
-          // stop() 里被调用——两者互相等待，先关监听必死锁。必须先杀
-          // ffmpeg（销毁会话断开响应），closeServer 才能等到连接归零
-          destroyAllSessions();
-          await closeServer(server);
-        }
-      };
+      const instance = new PlayerServer(boundPort, `http://${host}:${boundPort}`, null, async () => {
+        // 先销毁会话再关闭监听：活跃流会话的 HTTP 响应会钉住连接，
+        // 而 closeServer 要等所有连接结束；destroyAllSessions 又只在
+        // stop() 里被调用——两者互相等待，先关监听必死锁。必须先杀
+        // ffmpeg（销毁会话断开响应），closeServer 才能等到连接归零
+        destroyAllSessions();
+        await closeServer(server);
+      });
+      // listen 成功后的意外 error（罕见，如运行期 EADDRINUSE 变体）：仅记 error 日志，
+      // 不发事件——本进程模式与宿主同生共死，服务层可捕获的 error 没有独立于日志的
+      // 事件语义；启动期的 error（EADDRINUSE 重试等）发生在此监听挂上之前，不受影响
+      server.on('error', (err) => {
+        log.error('server', `HTTP 服务异常: ${err.message}`);
+      });
+      // start 延迟一拍发出：await startServer() 的续体是微任务，先于 setImmediate
+      // （宏任务）执行，调用方在 await 之后挂的 on('start') 不会错过事件
+      setImmediate(() =>
+        instance.emit('start', { port: boundPort, url: instance.url, host, childProcess: false })
+      );
+      return instance;
     } catch (err) {
       lastErr = err;
       if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err;
@@ -132,13 +140,24 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
     });
     const host = options.host ?? DEFAULT_HOST;
     log.info('server', `（子进程模式）运行于 http://${host}:${port}`);
-    return {
-      port,
-      url: `http://${host}:${port}`,
-      stop: async () => {
-        await killChildIfAlive();
-      }
-    };
+    let stopping = false;
+    const instance = new PlayerServer(port, `http://${host}:${port}`, child.pid ?? null, async () => {
+      stopping = true;
+      await killChildIfAlive();
+    });
+    // 意外退出（未被 stop() 发起）= 崩溃：发 crash 事件。本监听在 ready 之后才挂上，
+    // 启动期退出由上方启动 Promise 的 exit → reject 路径处理，不经此事件
+    child.on('exit', (code, signal) => {
+      if (stopping) return;
+      const message = `子进程意外退出（code=${code} signal=${signal}）`;
+      log.error('server', message);
+      instance.emit('crash', { code, signal, message });
+    });
+    // 与本进程模式一致：start 延迟一拍，await 后挂监听不丢事件
+    setImmediate(() =>
+      instance.emit('start', { port, url: instance.url, host, childProcess: true })
+    );
+    return instance;
   } catch (err) {
     // 启动失败兜底清理，不留半启动子进程
     await killChildIfAlive();

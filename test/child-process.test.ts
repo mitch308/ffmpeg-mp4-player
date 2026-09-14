@@ -70,6 +70,45 @@ describe('startServer 子进程模式', () => {
     expect(fromChild[0].message).toMatch(/^\[fmp4\]\[server\] 运行于 http:\/\//);
   });
 
+  test('子进程模式下生命周期事件同样发出（childProcess: true）', async () => {
+    const events: string[] = [];
+    let startPayload: { childProcess: boolean } | null = null;
+    server = await startServer({ childProcess: true, port: 0 });
+    server.on('start', (p) => { events.push('start'); startPayload = { childProcess: p.childProcess }; });
+    server.on('stop', () => events.push('stop'));
+    await new Promise((r) => setImmediate(r));
+    expect(events).toEqual(['start']);
+    expect(startPayload!.childProcess).toBe(true);
+    await server.stop();
+    expect(events).toEqual(['start', 'stop']);
+  });
+
+  test('子进程意外退出 → crash 事件，崩溃后实例仍可 stop() 清理', async () => {
+    server = await startServer({ childProcess: true, port: 0 });
+    expect(server.pid).not.toBeNull();
+    const crashPromise = new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+      server!.on('crash', (p) => resolve(p));
+      setTimeout(() => reject(new Error('5 秒内未收到 crash 事件')), 5000);
+    });
+    // 强杀子进程模拟崩溃（Windows 上 SIGKILL 表现为 code=1，POSIX 为 signal=SIGKILL）
+    process.kill(server!.pid!, 'SIGKILL');
+    const payload = await crashPromise;
+    expect(payload.signal === 'SIGKILL' || (payload.code !== null && payload.code !== 0)).toBe(true);
+    // 崩溃后实例仍可 stop() 清理（子进程已死，killChildIfAlive 无操作）
+    await server.stop();
+    server = null;
+  });
+
+  test('stop() 发起的子进程退出不触发 crash', async () => {
+    server = await startServer({ childProcess: true, port: 0 });
+    let crashed = false;
+    server.on('crash', () => { crashed = true; });
+    await server.stop();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(crashed).toBe(false);
+    server = null;
+  });
+
   test('显式 ffmpegPath 无效时 startServer 拒绝启动（父进程预校验，session 数保持 0）', async () => {
     await expect(
       startServer({ childProcess: true, ffmpegPath: 'C:/不存在的ffmpeg.exe' })
