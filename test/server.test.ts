@@ -354,8 +354,41 @@ describe('startServer 本进程模式', () => {
     expect((await fetch(`${server.url}/api/status`)).ok).toBe(true);
   });
 
-  test('getStatus() 状态快照：会话数/空闲态/运行时长/硬件信息', async () => {
-    setIdleConfirmDelayForTests(300);
+  test('服务重启后：旧会话 404，同 URL 重建会话可正常出流（客户端恢复路径的服务端契约）', async () => {
+    const samples = ensureSamples();
+    // 第一代服务：创建会话
+    const first = await startServer({ port: 0 });
+    const create1 = await fetch(`${first.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    const { sessionId } = (await create1.json()) as { sessionId: string };
+    const port = first.port;
+    await first.stop();
+
+    // 第二代服务（同端口，模拟宿主崩溃重启）：旧会话必然失效
+    const second = await startServer({ port });
+    try {
+      const stale = await fetch(`${second.url}/api/sessions/${sessionId}/stream?start=0`);
+      expect(stale.status).toBe(404);
+
+      // 客户端恢复路径：用原始 URL 重建会话并出流
+      const create2 = await fetch(`${second.url}/api/sessions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: samples.h264Aac })
+      });
+      expect(create2.ok).toBe(true);
+      const { sessionId: newId } = (await create2.json()) as { sessionId: string };
+      const stream = await fetch(`${second.url}/api/sessions/${newId}/stream`);
+      expect(stream.ok).toBe(true);
+      const buf = Buffer.from(await stream.arrayBuffer());
+      expect(buf.subarray(4, 8).toString('ascii')).toBe('ftyp'); // fMP4 init segment
+    } finally {
+      await second.stop();
+    }
+  });
+
+  test('getStatus() 状态快照：会话数/空闲态/运行时长/硬件信息', async () => {    setIdleConfirmDelayForTests(300);
     server = await startServer({ port: 0 });
     let st = await server.getStatus();
     expect(st.port).toBe(server.port);
