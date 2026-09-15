@@ -9,7 +9,13 @@ import { type QualityId, type TranscodeMode } from './quality';
 import type { ProbeResult } from './ffprobe';
 import type { Strategy } from './stream-strategy';
 
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟
+const SESSION_TIMEOUT_MS_DEFAULT = 5 * 60 * 1000; // 5 分钟
+let sessionTimeoutMs = SESSION_TIMEOUT_MS_DEFAULT;
+
+/** 仅供测试调整空闲超时（毫秒），使 5 分钟销毁路径可在秒级验证 */
+export function setSessionIdleTimeoutForTests(ms: number): void {
+  sessionTimeoutMs = ms;
+}
 
 export interface Session {
   id: string;
@@ -214,7 +220,7 @@ function scheduleCleanup(session: Session): void {
       return;
     }
     destroySession(session.id, '空闲超时');
-  }, SESSION_TIMEOUT_MS);
+  }, sessionTimeoutMs);
   // 清理定时器不应阻止进程退出（HTTP 监听器已维持事件循环）
   session.timeoutId.unref && session.timeoutId.unref();
 }
