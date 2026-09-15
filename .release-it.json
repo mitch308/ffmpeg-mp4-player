@@ -9,7 +9,9 @@
     "push": true
   },
   "npm": {
-    "publish": true
+    "publish": true,
+    "publishArgs": ["--access", "public"],
+    "skipChecks": true
   },
   "plugins": {
     "@release-it/conventional-changelog": {
