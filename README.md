@@ -118,6 +118,7 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 | `logger` | function | console | 自定义日志函数 `(level: 'info'\|'warn'\|'error', message: string) => void`；消息带统一前缀 `[fmp4]`。子进程模式下同样生效：子进程日志经 IPC 转发回父进程由此函数输出 |
 | `readHighWaterSec` | number | `45` | 前端读泵高水位（秒）：缓冲领先播放头超过该值暂停读取，防撑爆 MSE 配额。需大于低水位且 ≤600 |
 | `readLowWaterSec` | number | `15` | 前端读泵低水位（秒）：缓冲领先回落到该值以下恢复读取。非法配置启动即报错 |
+| `connectionKeepAliveSec` | number | `30` | 服务端 TCP keepalive 起始空闲时长（秒），`0` 显式禁用。用于清理网络级静默死亡（断电/拔网线/休眠）的半开连接，防 ffmpeg 残留；健康连接（含长暂停）不受影响。探测间隔/次数取 OS 默认 |
 
 日志统一以 `[fmp4][<组件>:<上下文>]` 开头（如 `[fmp4][session:abc123]`、`[fmp4][ffmpeg pid=1 session:abc123]`、`[fmp4][client ...]`），按会话 id grep 即可串联前后端全链路。前端播放器日志除浏览器 console 外，还会经 `POST /api/logs` 上报到服务端统一输出。
 

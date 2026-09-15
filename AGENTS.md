@@ -43,6 +43,7 @@
 - 客户端 `pumpReader` 的水位线（45s 暂停 / 15s 恢复）不能删：转码速度远快于实时，若无水位线会撑爆 Chrome MSE 配额（4K 片约 117 秒 ≈ 150MB），之后 appendBuffer 连续 QuotaExceededError 走静默丢 chunk 分支，buffered 出现空洞、播放头撞洞永久卡死（表现为"播放到某处停止且无任何报错"）。
 - QSV 路径缩放必须用普通 `scale`，不要用 `scale_qsv`：后者运行时损坏（"Impossible to convert between the formats"+"Function not implemented"）；普通 scale + 显式 qsv 解码器可用（get_format 协商让解码器输出系统内存帧，硬解仍生效）。结论基于 ffmpeg 6.1.1 实测，升级 7.x 需复验（见 `src/lib/hw-accel.ts` 的 `scaleHwFilter` 注释）。
 - 客户端流中断走自动恢复（`handleStreamFailure`：从当前播放位置重建流，连续 4 次失败才报错），不要改回直接 setError：数小时长片播放中瞬时网络抖动（切后台被系统/浏览器切断、休眠唤醒等）是常态，终态报错等于播放报废。
+- 半开连接清理：网络级静默死亡（断电/拔网线/休眠，无 FIN/RST）时暂停中的流连接在应用层完全静默，探测不到对端死亡，且 scheduleCleanup 见 process 非空无限续期——ffmpeg 会残留到 server.stop()（`test/pause-alive.test.ts` 半开用例固化）。修复 = 服务端 TCP keepalive（`src/lib/tcp-keepalive.ts`，`connectionKeepAliveSec` 选项，默认 30s，0 禁用）：内核代替应用 ACK 探测包，健康长暂停不受影响，死亡后走 req close 清理链。同机无法端到端复现内核级死亡探测（同机内核会代替死亡方 ACK 探测包），keepalive 测试只验证接线。
 
 ## 测试
 

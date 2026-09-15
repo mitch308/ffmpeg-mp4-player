@@ -344,6 +344,16 @@ describe('startServer 本进程模式', () => {
     await expect(startServer({ port: 0, readHighWaterSec: 601 })).rejects.toThrow(/水位线/);
   });
 
+  test('connectionKeepAliveSec：非法配置启动即报错，0（禁用）与合法值可启动', async () => {
+    await expect(startServer({ port: 0, connectionKeepAliveSec: -1 })).rejects.toThrow(/keepalive/i);
+    await expect(startServer({ port: 0, connectionKeepAliveSec: 3601 })).rejects.toThrow(/keepalive/i);
+    server = await startServer({ port: 0, connectionKeepAliveSec: 0 });
+    expect((await fetch(`${server.url}/api/status`)).ok).toBe(true);
+    await server.stop();
+    server = await startServer({ port: 0, connectionKeepAliveSec: 60 });
+    expect((await fetch(`${server.url}/api/status`)).ok).toBe(true);
+  });
+
   test('getStatus() 状态快照：会话数/空闲态/运行时长/硬件信息', async () => {
     setIdleConfirmDelayForTests(300);
     server = await startServer({ port: 0 });

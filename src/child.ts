@@ -1,7 +1,7 @@
 // src/child.ts — 子进程模式入口：由父进程 fork，通过 IPC 回报端口
 // 父进程通过环境变量 FFMPEG_PLAYER_CHILD_OPTIONS 传入 JSON 序列化的启动配置
 import { startInProcess } from './index';
-import { PlayerServerOptions, resolveWaterConfig } from './config';
+import { PlayerServerOptions, resolveWaterConfig, resolveKeepAliveSec } from './config';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
 import { configureLogger, type LogLevel } from './lib/logger';
 import { createSafeIpcSender } from './lib/ipc-safe';
@@ -57,8 +57,9 @@ try {
       fail(`配置的 ${name} 不可用（文件不存在或不可执行）: ${p}`);
     }
   }
-  // 水位线配置校验与父进程 startServer 同镜像（子进程可被直接 fork，此处是权威校验点）
+  // 水位线/keepalive 配置校验与父进程 startServer 同镜像（子进程可被直接 fork，此处是权威校验点）
   resolveWaterConfig(options);
+  resolveKeepAliveSec(options);
   configureBinaries({
     ffmpegPath: options.ffmpegPath ?? null,
     ffprobePath: options.ffprobePath ?? null

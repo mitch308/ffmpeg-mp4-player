@@ -26,6 +26,13 @@ export interface PlayerServerOptions {
   readHighWaterSec?: number;
   /** 前端读泵低水位（秒）：缓冲领先回落到该值以下恢复读取。默认 15；需大于 0 且小于高水位 */
   readLowWaterSec?: number;
+  /**
+   * 服务端 TCP keepalive 起始空闲时长（秒），默认 30；显式传 0 禁用。
+   * 用于清理网络级静默死亡（断电/拔网线/休眠，无 FIN/RST）的半开连接：
+   * 健康连接（含长暂停——内核代替应用 ACK 探测包）不受影响；对端死亡后探测失败
+   * 触发 socket 关闭，走 req close 清理链杀 ffmpeg。探测间隔/次数取 OS 默认。
+   */
+  connectionKeepAliveSec?: number;
 }
 
 /** 服务生命周期事件负载映射 */
@@ -90,6 +97,17 @@ export function resolveWaterConfig(options: Pick<PlayerServerOptions, 'readHighW
     );
   }
   return { readHighWaterSec: high, readLowWaterSec: low };
+}
+
+const DEFAULT_CONNECTION_KEEP_ALIVE_SEC = 30;
+
+/** 解析并校验 TCP keepalive 配置（0 = 显式禁用；非法配置抛错，不静默回退默认值） */
+export function resolveKeepAliveSec(options: Pick<PlayerServerOptions, 'connectionKeepAliveSec'>): number {
+  const sec = options.connectionKeepAliveSec ?? DEFAULT_CONNECTION_KEEP_ALIVE_SEC;
+  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec < 0 || sec > 3600) {
+    throw new Error(`无效的 connectionKeepAliveSec: ${sec}（需 0 ≤ 秒数 ≤ 3600，0 为禁用）`);
+  }
+  return sec;
 }
 
 /**

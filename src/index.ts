@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
 import { configureLogger, emitRaw, type LogLevel } from './lib/logger';
+import { applyTcpKeepAlive } from './lib/tcp-keepalive';
 import { getSessionCount, onSessionCountChange } from './lib/session-manager';
 import { createIdleMonitor, getIdleConfirmDelayMs } from './lib/idle-monitor';
 import { destroyAllSessions } from './lib/session-manager';
@@ -15,7 +16,7 @@ import { pickFreePort } from './lib/ports';
 import { killProcessTree } from './lib/kill-tree';
 import { createApp } from './server';
 import {
-  PlayerServer, PlayerServerOptions, DEFAULT_HOST, resolveWaterConfig, type PlayerServerStatus
+  PlayerServer, PlayerServerOptions, DEFAULT_HOST, resolveWaterConfig, resolveKeepAliveSec, type PlayerServerStatus
 } from './config';
 import { getCaps } from './lib/hw-accel';
 import { log } from './lib/logger';
@@ -36,9 +37,17 @@ function resolveChildEntry(): string {
   return path.join(here, '../dist/child.cjs');
 }
 
-function listen(app: ReturnType<typeof createApp>, port: number, host: string): Promise<Server> {
+function listen(
+  app: ReturnType<typeof createApp>,
+  port: number,
+  host: string,
+  keepAliveSec: number
+): Promise<Server> {
   return new Promise((resolve, reject) => {
     const server = app.listen(port, host, () => resolve(server));
+    // TCP keepalive：半开连接（客户端静默死亡，无 FIN/RST）靠内核探测清理，
+    // 死亡后 socket 关闭走 req close → stopStream 清理链（0 = 显式禁用）
+    if (keepAliveSec > 0) applyTcpKeepAlive(server, keepAliveSec);
     server.once('error', reject);
   });
 }
@@ -60,6 +69,7 @@ export async function startInProcess(
 ): Promise<PlayerServer> {
   const host = options.host ?? DEFAULT_HOST;
   const water = resolveWaterConfig(options);
+  const keepAliveSec = resolveKeepAliveSec(options);
   const app = createApp({ staticPlayer: options.staticPlayer, playerConfig: water });
   const explicit = options.port != null;
 
@@ -71,7 +81,7 @@ export async function startInProcess(
       ? options.port!
       : await pickFreePort(host);
     try {
-      const server = await listen(app, port, host);
+      const server = await listen(app, port, host, keepAliveSec);
       // port 为 0 表示由 OS 分配临时端口：回读实际绑定端口，
       // 返回的 port/url 必须反映真实端口（否则调用方拿到 0 无法访问）
       const boundPort = (server.address() as AddressInfo).port;
@@ -271,8 +281,9 @@ export async function startServer(options: PlayerServerOptions = {}): Promise<Pl
   // 使后续路径校验/启动过程的日志都走同一出口
   configureLogger(options.logger);
 
-  // 读泵水位线配置是硬契约：非法立即报错，不静默回退默认值
+  // 读泵水位线/keepalive 配置是硬契约：非法立即报错，不静默回退默认值
   resolveWaterConfig(options);
+  resolveKeepAliveSec(options);
 
   // 显式配置的路径是硬契约：路径不可用时立即报错。
   // 解析链对无效路径会静默降级到下一级（环境变量/static 包，devDeps 装了 static 包就能解析成功），
