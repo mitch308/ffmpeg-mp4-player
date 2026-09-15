@@ -2,6 +2,7 @@
 import { describe, test, expect, afterEach, vi } from 'vitest';
 import { startServer } from '../src/index';
 import { getSessionCount } from '../src/lib/session-manager';
+import { setIdleConfirmDelayForTests } from '../src/lib/idle-monitor';
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
@@ -11,7 +12,20 @@ import { ensureSamples } from './helpers/samples';
 import { getFfmpegPath } from '../src/lib/ffmpeg-path';
 
 let server: Awaited<ReturnType<typeof startServer>> | null = null;
-afterEach(async () => { if (server) { await server.stop(); server = null; } });
+afterEach(async () => {
+  setIdleConfirmDelayForTests(10_000); // 复位确认延迟，避免污染其他测试
+  if (server) { await server.stop(); server = null; }
+});
+
+/** 轮询等待条件成立（超时抛错） */
+async function waitFor(desc: string, cond: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cond()) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`等待超时（${timeoutMs}ms）：${desc}`);
+}
 
 describe('startServer 本进程模式', () => {
   test('显式端口启动，返回 port/url，/api/status 可访问', async () => {
@@ -254,6 +268,119 @@ describe('startServer 本进程模式', () => {
     server.off('stop', onStop);
     await server.stop();
     expect(called).toBe(0);
+  });
+
+  test('idle/busy 事件：启动空转进空闲，会话接入转繁忙，销毁再空闲', async () => {
+    setIdleConfirmDelayForTests(300);
+    server = await startServer({ port: 0 });
+    const events: string[] = [];
+    server.on('idle', () => events.push('idle'));
+    server.on('busy', () => events.push('busy'));
+
+    // 启动即无会话：确认期后进入空闲
+    await waitFor('首次 idle', () => events.includes('idle'), 5000);
+    expect(server.isIdle()).toBe(true);
+
+    // 新会话接入：立即转繁忙（busy 仅在确认过的空闲态后出现）
+    const samples = ensureSamples();
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    expect(create.ok).toBe(true);
+    const { sessionId } = (await create.json()) as { sessionId: string };
+    await waitFor('busy 事件', () => events.includes('busy'), 5000);
+    expect(events).toEqual(['idle', 'busy']);
+    expect(server.isIdle()).toBe(false);
+
+    // 会话销毁：再次确认空闲
+    await fetch(`${server.url}/api/sessions/${sessionId}`, { method: 'DELETE' });
+    await waitFor('第二次 idle', () => events.length === 3, 5000);
+    expect(events).toEqual(['idle', 'busy', 'idle']);
+    expect(server.isIdle()).toBe(true);
+  });
+
+  test('确认期内创建会话不误发 idle（会话间隙吸收）', async () => {
+    setIdleConfirmDelayForTests(2000);
+    server = await startServer({ port: 0 });
+    const events: string[] = [];
+    server.on('idle', () => events.push('idle'));
+    server.on('busy', () => events.push('busy'));
+
+    // 确认期（2s）内创建会话：取消确认定时器，从未进入空闲 → 不发 idle 也不发 busy
+    const samples = ensureSamples();
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    const { sessionId } = (await create.json()) as { sessionId: string };
+    await new Promise((r) => setTimeout(r, 2600));
+    expect(events).toEqual([]);
+    expect(server.isIdle()).toBe(false);
+
+    // 销毁后走完整确认期 → idle
+    await fetch(`${server.url}/api/sessions/${sessionId}`, { method: 'DELETE' });
+    await waitFor('idle', () => events.includes('idle'), 5000);
+    expect(events).toEqual(['idle']);
+  });
+
+  test('读泵水位线：默认值经 /api/player-config 下发', async () => {
+    server = await startServer({ port: 0 });
+    const res = await fetch(`${server.url}/api/player-config`);
+    expect(res.ok).toBe(true);
+    expect(await res.json()).toEqual({ readHighWaterSec: 45, readLowWaterSec: 15 });
+  });
+
+  test('读泵水位线：init 配置经 /api/player-config 下发', async () => {
+    server = await startServer({ port: 0, readHighWaterSec: 60, readLowWaterSec: 20 });
+    const res = await fetch(`${server.url}/api/player-config`);
+    expect(await res.json()).toEqual({ readHighWaterSec: 60, readLowWaterSec: 20 });
+  });
+
+  test('读泵水位线：非法配置启动即报错（low ≥ high、非正数、超上限）', async () => {
+    await expect(startServer({ port: 0, readHighWaterSec: 10, readLowWaterSec: 20 }))
+      .rejects.toThrow(/水位线/);
+    await expect(startServer({ port: 0, readLowWaterSec: 0 })).rejects.toThrow(/水位线/);
+    await expect(startServer({ port: 0, readHighWaterSec: 601 })).rejects.toThrow(/水位线/);
+  });
+
+  test('getStatus() 状态快照：会话数/空闲态/运行时长/硬件信息', async () => {
+    setIdleConfirmDelayForTests(300);
+    server = await startServer({ port: 0 });
+    let st = await server.getStatus();
+    expect(st.port).toBe(server.port);
+    expect(st.url).toBe(server.url);
+    expect(st.childProcess).toBe(false);
+    expect(st.pid).toBeNull();
+    expect(st.stopped).toBe(false);
+    expect(st.activeSessions).toBe(0);
+    expect(st.hw.encoder).toBeTruthy();
+    expect(st.uptimeSec).toBeGreaterThanOrEqual(0);
+
+    // 会话创建 → activeSessions 增加；销毁 → 确认期后 idle=true
+    const samples = ensureSamples();
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    const { sessionId } = (await create.json()) as { sessionId: string };
+    st = await server.getStatus();
+    expect(st.activeSessions).toBe(1);
+    expect(st.idle).toBe(false);
+    expect(server.isIdle()).toBe(false);
+
+    await fetch(`${server.url}/api/sessions/${sessionId}`, { method: 'DELETE' });
+    await new Promise((r) => setTimeout(r, 800)); // 等确认期（300ms）度过
+    st = await server.getStatus();
+    expect(st.activeSessions).toBe(0);
+    expect(st.idle).toBe(true);
+
+    // stop() → stopped=true，会话清空
+    await server.stop();
+    st = await server.getStatus();
+    expect(st.stopped).toBe(true);
+    expect(st.activeSessions).toBe(0);
+    server = null;
   });
 
   test('dist/client/ 静态服务可访问 player.html（前端构建产物）', async () => {

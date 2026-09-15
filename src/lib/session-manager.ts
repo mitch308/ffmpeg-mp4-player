@@ -17,6 +17,19 @@ export function setSessionIdleTimeoutForTests(ms: number): void {
   sessionTimeoutMs = ms;
 }
 
+type SessionCountCallback = (count: number) => void;
+const sessionCountListeners = new Set<SessionCountCallback>();
+
+/** 订阅会话数量变化（createSession/destroySession 后触发），返回退订函数。空闲状态机与子进程计数上报用 */
+export function onSessionCountChange(cb: SessionCountCallback): () => void {
+  sessionCountListeners.add(cb);
+  return () => { sessionCountListeners.delete(cb); };
+}
+
+function notifySessionCount(): void {
+  for (const cb of sessionCountListeners) cb(sessions.size);
+}
+
 export interface Session {
   id: string;
   url: string;
@@ -62,6 +75,7 @@ export async function createSession(
   };
   sessions.set(id, session);
   scheduleCleanup(session);
+  notifySessionCount();
   return session;
 }
 
@@ -180,6 +194,7 @@ export function destroySession(id: string, reason?: string): void {
     clearTimeout(session.timeoutId);
   }
   sessions.delete(id);
+  notifySessionCount();
   log.info(`session:${id}`, `销毁${reason ? `（${reason}）` : ''}`);
 }
 

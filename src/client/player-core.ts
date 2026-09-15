@@ -32,6 +32,15 @@ export interface SessionMeta {
   hwAvailable: boolean;
 }
 
+export interface PlayerCoreCreateOptions {
+  quality?: QualityId;
+  mode?: ModeId;
+  /** 读泵高水位（秒）：缓冲领先播放头超过该值暂停读取，默认 45 */
+  readHighWaterSec?: number;
+  /** 读泵低水位（秒）：缓冲领先回落到该值以下恢复读取，默认 15 */
+  readLowWaterSec?: number;
+}
+
 export interface PlayerCoreCallbacks {
   /** 过程性状态文案（seek/恢复/切换中） */
   onStatus?(msg: string): void;
@@ -51,6 +60,11 @@ const VIDEO_CODECS = [
   'avc1.640032', // High 5.0
   'avc1.640033'  // High 5.1
 ];
+
+// 读泵默认水位线（秒），与 src/config.ts 的 DEFAULT_READ_*_WATER_SEC 保持一致
+// （config.ts 含 Node 依赖不可跨端引入，两端数值勿单方面改动）
+const DEFAULT_READ_HIGH_WATER_SEC = 45;
+const DEFAULT_READ_LOW_WATER_SEC = 15;
 
 function pickCodec(hasAudio: boolean): string {
   const suffix = hasAudio ? ',mp4a.40.2' : '';
@@ -82,6 +96,8 @@ export class PlayerCore {
   private cb: PlayerCoreCallbacks;
   private gen = 0;                 // 代次令牌，使在途异步操作失效
   private logTag: string;          // 日志标签：player:<sessionId>
+  private readHighWaterSec: number;
+  private readLowWaterSec: number;
   private mediaSource: MediaSource | null = null;
   private sourceBuffer: SourceBuffer | null = null;
   private objectURL: string | null = null;
@@ -93,12 +109,24 @@ export class PlayerCore {
   private networkFailStreak = 0;   // 连续网络失败次数（收到数据即清零）
   private destroyed = false;
 
-  private constructor(meta: SessionMeta, quality: QualityId, mode: ModeId, cb: PlayerCoreCallbacks) {
+  private constructor(
+    meta: SessionMeta,
+    quality: QualityId,
+    mode: ModeId,
+    water: { readHighWaterSec: number; readLowWaterSec: number },
+    cb: PlayerCoreCallbacks
+  ) {
     this.meta = meta;
     this.quality = quality;
     this.mode = mode;
     this.cb = cb;
     this.logTag = 'player:' + meta.sessionId;
+    // 水位线契约（勿删）：low 必须小于 high，非法配置整体回退默认值——
+    // 没有水位线会撑爆 Chrome MSE 配额导致静默卡死（见 AGENTS.md 踩坑记录）
+    const { readHighWaterSec: h, readLowWaterSec: l } = water;
+    const valid = Number.isFinite(h) && Number.isFinite(l) && h > 0 && l > 0 && l < h;
+    this.readHighWaterSec = valid ? h : DEFAULT_READ_HIGH_WATER_SEC;
+    this.readLowWaterSec = valid ? l : DEFAULT_READ_LOW_WATER_SEC;
     this.video = document.createElement('video');
     this.video.preload = 'auto';
     this.bindVideoEvents();
@@ -108,7 +136,7 @@ export class PlayerCore {
   /** 创建会话（POST /api/sessions）并构造播放核心 */
   static async create(
     url: string,
-    opts: { quality?: QualityId; mode?: ModeId } = {},
+    opts: PlayerCoreCreateOptions = {},
     cb: PlayerCoreCallbacks = {}
   ): Promise<PlayerCore> {
     const resp = await fetch('/api/sessions', {
@@ -125,9 +153,16 @@ export class PlayerCore {
       'player:' + meta.sessionId,
       `会话创建 ${meta.width}x${meta.height} codec=${meta.codec}/${meta.pixFmt}` +
       ` audio=${meta.audioCodec ?? '无'} strategy=${meta.streamMode}(${meta.encoder ?? '-'})` +
-      ` quality=${opts.quality ?? 'origin'} mode=${opts.mode ?? 'auto'} duration=${meta.duration}s`
+      ` quality=${opts.quality ?? 'origin'} mode=${opts.mode ?? 'auto'} duration=${meta.duration}s` +
+      ` water=${opts.readHighWaterSec ?? DEFAULT_READ_HIGH_WATER_SEC}/${opts.readLowWaterSec ?? DEFAULT_READ_LOW_WATER_SEC}s`
     );
-    return new PlayerCore(meta, opts.quality ?? 'origin', opts.mode ?? 'auto', cb);
+    return new PlayerCore(
+      meta,
+      opts.quality ?? 'origin',
+      opts.mode ?? 'auto',
+      { readHighWaterSec: opts.readHighWaterSec ?? DEFAULT_READ_HIGH_WATER_SEC, readLowWaterSec: opts.readLowWaterSec ?? DEFAULT_READ_LOW_WATER_SEC },
+      cb
+    );
   }
 
   // ===== 对 UI 暴露的动作 =====
@@ -299,8 +334,9 @@ export class PlayerCore {
     // 传导，ffmpeg 阻塞在写出上，全链路不再堆积。没有它 4x 实时的转码速度会
     // 撑爆 Chrome MSE 配额（约 150MB），之后 QuotaExceededError 静默丢 chunk，
     // buffered 出现空洞，播放头撞洞后永久卡死。
-    const READ_HIGH_WATER = 45; // 领先播放头超过该秒数 → 暂停读取
-    const READ_LOW_WATER = 15;  // 领先回落到该秒数以下 → 恢复读取
+    // 数值可由服务端 /api/player-config 与 URL 参数配置（见 PlayerCoreCreateOptions）
+    const READ_HIGH_WATER = this.readHighWaterSec; // 领先播放头超过该秒数 → 暂停读取
+    const READ_LOW_WATER = this.readLowWaterSec;   // 领先回落到该秒数以下 → 恢复读取
 
     const bufferedAhead = (): number => {
       const b = this.video.buffered;

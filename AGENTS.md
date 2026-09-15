@@ -18,7 +18,10 @@
 调用链：`src/index.ts`（startServer API）→ `src/server.ts`（Express app 工厂）→ `src/lib/session-manager.ts`（内存 sessions Map，5 分钟空闲清理）→ `src/lib/ffmpeg-process.ts`（spawn；fMP4 通过 stdout 输出）。子进程模式经 `src/child.ts` fork + IPC 回报端口；杀进程树统一走 `src/lib/kill-tree.ts`。
 
 - 日志统一走 `src/lib/logger.ts`：格式恒为 `[fmp4][<组件>:<上下文>] <消息>`，服务端禁止直接 `console.*`；`startServer({ logger })` 可注入自定义日志函数，子进程模式经 IPC（`type:'log'` 消息）转发回父进程统一输出——IPC 发送必须走 `src/lib/ipc-safe.ts`（不可序列化消息/通道竞态会抛错杀死子进程）。前端日志在 `src/client/logger.ts`（console + 批量 POST /api/logs），与服务端同一前缀体系。
-- `startServer` 返回 `PlayerServer`（`src/config.ts`，继承 EventEmitter）：`start`/`stop`/`crash` 生命周期事件，on/once/off 有 TS 类型约束。`start` 在 resolve 后用 setImmediate 延迟一拍发出（保证 await 后挂监听不丢）；`stop()` 幂等，仅首次真实关闭并发事件；`crash` 仅子进程模式（子进程意外退出，`stopping` 标志排除 stop() 发起的退出）——本进程模式不发 crash，http server 运行期 error 只走 error 日志。
+- `startServer` 返回 `PlayerServer`（`src/config.ts`，继承 EventEmitter）：`start`/`stop`/`idle`/`busy`/`crash` 生命周期事件，on/once/off 有 TS 类型约束。`start` 在 resolve 后用 setImmediate 延迟一拍发出（保证 await 后挂监听不丢）；`stop()` 幂等，仅首次真实关闭并发事件；`crash` 仅子进程模式（子进程意外退出，`stopping` 标志排除 stop() 发起的退出）——本进程模式不发 crash，http server 运行期 error 只走 error 日志。
+- 空闲/繁忙状态机在 `src/lib/idle-monitor.ts`：口径 = **无任何会话**（暂停/断连期间会话存在，不误判，`test/pause-alive.test.ts` 锁定），Map 变空后经 10s 确认期发 `idle`（边缘触发），IDLE 态新会话立即发 `busy`；确认期内建会不产生状态转变。本进程模式由 `startInProcess` 内接线；子进程模式状态机跑在子进程内，状态转变经 IPC（`type:'idle'`）上报父进程发事件，确认延迟经环境变量 `FFMPEG_PLAYER_IDLE_CONFIRM_MS` 注入（测试用）。会话数量变化通知走 `session-manager.onSessionCountChange`（多订阅，返回退订函数），monitor 订阅后必须立即评估初始会话数（启动空转也要进确认期）。**子进程模式 idle 消息可能先于 ready 到达**（确认期短于子进程硬件探测时长）：父进程缓存 pendingIdle，实例就绪后 setImmediate 延迟一拍补发（直接补发会在 startServer resolve 前发事件，调用方挂不上监听）。
+- `server.getStatus()` 状态快照（`src/config.ts` 的 `PlayerServerStatus`）：port/url/pid/childProcess/stopped/idle/activeSessions/hw/uptimeSec。子进程模式的会话数由子进程经 IPC（`type:'sessions'`）持续上报缓存，硬件能力随 ready 消息一次性携带（缺失回退父进程自行探测）。
+- 读泵水位线（`PlayerServerOptions.readHighWaterSec/readLowWaterSec`，默认 45/15）经 `resolveWaterConfig` 校验（0 < low < high ≤ 600，非法抛错），由 `GET /api/player-config` 下发前端；播放器页 URL 参数 `highwater`/`lowwater` 可逐页覆盖，非法组合整体回退默认。水位线可配但不可删（AGENTS.md 踩坑记录），两端默认值常量保持一致勿单方面改动。
 
 - `src/lib/stream-strategy.ts` 和 `ffmpeg-process.ts` 里的 `buildArgs` 是纯函数——新的决策逻辑放在这里，便于单测。
 - 每个会话的策略链：copy（remux 直通）→ hw（硬编）→ sw（软编），只在策略**尚未输出任何字节**时失败才降级（把两份 fMP4 混进同一响应流会损坏数据）。
