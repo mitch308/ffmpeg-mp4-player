@@ -1,5 +1,5 @@
 // test/server.test.ts — startServer 本进程模式生命周期
-import { describe, test, expect, afterEach } from 'vitest';
+import { describe, test, expect, afterEach, vi } from 'vitest';
 import { startServer } from '../src/index';
 import { getSessionCount } from '../src/lib/session-manager';
 import { mkdtempSync, readFileSync, writeFileSync } from 'fs';
@@ -178,6 +178,82 @@ describe('startServer 本进程模式', () => {
     server = await startServer({ port: 0 });
     const demo = await fetch(`${server.url}/index.html`);
     expect(demo.ok).toBe(true);
+  });
+
+  test('POST /api/logs 批量上报：前端日志经统一 logger 以 client 前缀输出', async () => {
+    const received: Array<{ level: string; message: string }> = [];
+    server = await startServer({
+      port: 0,
+      logger: (level, message) => received.push({ level, message })
+    });
+    const res = await fetch(`${server.url}/api/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entries: [
+          { level: 'info', tag: 'player:s1', message: '会话创建' },
+          { level: 'error', tag: 'player:s1', message: '播放错误' }
+        ]
+      })
+    });
+    expect(res.ok).toBe(true);
+    // 只筛 client 前缀条目（启动日志也走同一 logger，属预期）
+    const clientLogs = received.filter((r) => r.message.includes('[client '));
+    expect(clientLogs).toEqual([
+      { level: 'info', message: '[fmp4][client player:s1] 会话创建' },
+      { level: 'error', message: '[fmp4][client player:s1] 播放错误' }
+    ]);
+  });
+
+  test('POST /api/logs 非法请求体 → 400', async () => {
+    server = await startServer({ port: 0 });
+    for (const body of [null, {}, { entries: 'x' }, { entries: [] }]) {
+      const res = await fetch(`${server.url}/api/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  test('startServer({ logger }) 自定义日志函数接收启动日志', async () => {
+    const received: string[] = [];
+    server = await startServer({
+      port: 0,
+      logger: (_level, message) => received.push(message)
+    });
+    expect(received.some((m) => m.includes('[fmp4][server] 运行于 http://'))).toBe(true);
+  });
+
+  test('生命周期事件：start/stop 依次发出，带负载，重复 stop 只发一次', async () => {
+    const events: string[] = [];
+    let startPayload: { port: number; url: string; host: string; childProcess: boolean } | null = null;
+    server = await startServer({ port: 0 });
+    expect(server.pid).toBeNull(); // 本进程模式与宿主同进程，无子进程 pid
+    // startServer resolve 后（同一微任务续体内）挂监听：start 用 setImmediate 延迟一拍，必能收到
+    server.on('start', (p) => { events.push('start'); startPayload = { ...p }; });
+    server.on('stop', () => events.push('stop'));
+    await new Promise((r) => setImmediate(r));
+    expect(events).toEqual(['start']);
+    expect(startPayload!.port).toBe(server.port);
+    expect(startPayload!.url).toBe(server.url);
+    expect(startPayload!.host).toBe('127.0.0.1');
+    expect(startPayload!.childProcess).toBe(false);
+
+    await server.stop();
+    await server.stop(); // 重复调用幂等，stop 事件只发一次
+    expect(events).toEqual(['start', 'stop']);
+  });
+
+  test('off 取消事件监听', async () => {
+    server = await startServer({ port: 0 });
+    let called = 0;
+    const onStop = () => called++;
+    server.on('stop', onStop);
+    server.off('stop', onStop);
+    await server.stop();
+    expect(called).toBe(0);
   });
 
   test('dist/client/ 静态服务可访问 player.html（前端构建产物）', async () => {

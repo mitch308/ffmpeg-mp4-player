@@ -3,10 +3,29 @@
 import { startInProcess } from './index';
 import { PlayerServerOptions } from './config';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
+import { configureLogger, type LogLevel } from './lib/logger';
+import { createSafeIpcSender } from './lib/ipc-safe';
+
+// IPC 安全发送：消息不可序列化 / 通道关闭竞态时降级或静默，绝不抛错杀死子进程
+const sendIpc = createSafeIpcSender(
+  () => process.connected === true,
+  process.send?.bind(process) ?? (() => {})
+);
 
 function fail(message: string): never {
-  process.send?.({ type: 'error', message });
+  sendIpc({ type: 'error', message });
   process.exit(1);
+}
+
+/**
+ * 子进程日志出口：不写自身 console（stdio inherit，会造成父进程重复输出），
+ * 改经 IPC 送回父进程，由父进程当前配置的日志函数（自定义或默认 console）统一输出。
+ * 须在 startInProcess 之前配置（后者不会重置 logger）。
+ */
+function configureIpcLogger(): void {
+  configureLogger((level: LogLevel, message: string) => {
+    sendIpc({ type: 'log', level, message });
+  });
 }
 
 const raw = process.env.FFMPEG_PLAYER_CHILD_OPTIONS;
@@ -47,6 +66,7 @@ try {
 }
 
 // 此处模块级 override 已就位，startInProcess 内部的解析链读到的是本子进程的配置
+configureIpcLogger();
 startInProcess(options)
   .then((server) => {
     process.send?.({ type: 'ready', port: server.port });

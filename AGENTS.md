@@ -17,6 +17,9 @@
 
 调用链：`src/index.ts`（startServer API）→ `src/server.ts`（Express app 工厂）→ `src/lib/session-manager.ts`（内存 sessions Map，5 分钟空闲清理）→ `src/lib/ffmpeg-process.ts`（spawn；fMP4 通过 stdout 输出）。子进程模式经 `src/child.ts` fork + IPC 回报端口；杀进程树统一走 `src/lib/kill-tree.ts`。
 
+- 日志统一走 `src/lib/logger.ts`：格式恒为 `[fmp4][<组件>:<上下文>] <消息>`，服务端禁止直接 `console.*`；`startServer({ logger })` 可注入自定义日志函数，子进程模式经 IPC（`type:'log'` 消息）转发回父进程统一输出——IPC 发送必须走 `src/lib/ipc-safe.ts`（不可序列化消息/通道竞态会抛错杀死子进程）。前端日志在 `src/client/logger.ts`（console + 批量 POST /api/logs），与服务端同一前缀体系。
+- `startServer` 返回 `PlayerServer`（`src/config.ts`，继承 EventEmitter）：`start`/`stop`/`crash` 生命周期事件，on/once/off 有 TS 类型约束。`start` 在 resolve 后用 setImmediate 延迟一拍发出（保证 await 后挂监听不丢）；`stop()` 幂等，仅首次真实关闭并发事件；`crash` 仅子进程模式（子进程意外退出，`stopping` 标志排除 stop() 发起的退出）——本进程模式不发 crash，http server 运行期 error 只走 error 日志。
+
 - `src/lib/stream-strategy.ts` 和 `ffmpeg-process.ts` 里的 `buildArgs` 是纯函数——新的决策逻辑放在这里，便于单测。
 - 每个会话的策略链：copy（remux 直通）→ hw（硬编）→ sw（软编），只在策略**尚未输出任何字节**时失败才降级（把两份 fMP4 混进同一响应流会损坏数据）。
 - 输出不变式：视频恒为 H.264；音频为 AAC（拷贝或转码）或不存在。源必须是 H.264 8bit yuv420p 才有直通资格。

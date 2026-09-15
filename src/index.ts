@@ -7,11 +7,13 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
+import { configureLogger, emitRaw, type LogLevel } from './lib/logger';
 import { destroyAllSessions } from './lib/session-manager';
 import { pickFreePort } from './lib/ports';
 import { killProcessTree } from './lib/kill-tree';
 import { createApp } from './server';
 import { PlayerServer, PlayerServerOptions, DEFAULT_HOST } from './config';
+import { log } from './lib/logger';
 
 export type { PlayerServer, PlayerServerOptions } from './config';
 
@@ -63,19 +65,27 @@ export async function startInProcess(options: PlayerServerOptions): Promise<Play
       // port 为 0 表示由 OS 分配临时端口：回读实际绑定端口，
       // 返回的 port/url 必须反映真实端口（否则调用方拿到 0 无法访问）
       const boundPort = (server.address() as AddressInfo).port;
-      console.log(`ffmpeg-mp4-player 运行于 http://${host}:${boundPort}`);
-      return {
-        port: boundPort,
-        url: `http://${host}:${boundPort}`,
-        stop: async () => {
-          // 先销毁会话再关闭监听：活跃流会话的 HTTP 响应会钉住连接，
-          // 而 closeServer 要等所有连接结束；destroyAllSessions 又只在
-          // stop() 里被调用——两者互相等待，先关监听必死锁。必须先杀
-          // ffmpeg（销毁会话断开响应），closeServer 才能等到连接归零
-          destroyAllSessions();
-          await closeServer(server);
-        }
-      };
+      log.info('server', `运行于 http://${host}:${boundPort}`);
+      const instance = new PlayerServer(boundPort, `http://${host}:${boundPort}`, null, async () => {
+        // 先销毁会话再关闭监听：活跃流会话的 HTTP 响应会钉住连接，
+        // 而 closeServer 要等所有连接结束；destroyAllSessions 又只在
+        // stop() 里被调用——两者互相等待，先关监听必死锁。必须先杀
+        // ffmpeg（销毁会话断开响应），closeServer 才能等到连接归零
+        destroyAllSessions();
+        await closeServer(server);
+      });
+      // listen 成功后的意外 error（罕见，如运行期 EADDRINUSE 变体）：仅记 error 日志，
+      // 不发事件——本进程模式与宿主同生共死，服务层可捕获的 error 没有独立于日志的
+      // 事件语义；启动期的 error（EADDRINUSE 重试等）发生在此监听挂上之前，不受影响
+      server.on('error', (err) => {
+        log.error('server', `HTTP 服务异常: ${err.message}`);
+      });
+      // start 延迟一拍发出：await startServer() 的续体是微任务，先于 setImmediate
+      // （宏任务）执行，调用方在 await 之后挂的 on('start') 不会错过事件
+      setImmediate(() =>
+        instance.emit('start', { port: boundPort, url: instance.url, host, childProcess: false })
+      );
+      return instance;
     } catch (err) {
       lastErr = err;
       if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err;
@@ -111,9 +121,17 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
   try {
     const port = await new Promise<number>((resolve, reject) => {
       const onMessage = (msg: unknown) => {
-        const m = msg as { type?: string; port?: number; message?: string };
+        const m = msg as { type?: string; port?: number; message?: string; level?: string };
         if (m?.type === 'ready' && typeof m.port === 'number') resolve(m.port);
         else if (m?.type === 'error') reject(new Error(m.message ?? '子进程启动失败'));
+        else if (m?.type === 'log') {
+          // 子进程日志经 IPC 转发：走本进程配置的日志出口（自定义函数或默认 console）。
+          // IPC 保序，且子进程 '运行于' 日志先于 ready 发出，resolve 时已送达
+          emitRaw(
+            m.level === 'warn' || m.level === 'error' ? (m.level as LogLevel) : 'info',
+            typeof m.message === 'string' ? m.message : ''
+          );
+        }
       };
       child.on('message', onMessage);
       child.once('exit', (code) =>
@@ -121,14 +139,25 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
       );
     });
     const host = options.host ?? DEFAULT_HOST;
-    console.log(`ffmpeg-mp4-player（子进程模式）运行于 http://${host}:${port}`);
-    return {
-      port,
-      url: `http://${host}:${port}`,
-      stop: async () => {
-        await killChildIfAlive();
-      }
-    };
+    log.info('server', `（子进程模式）运行于 http://${host}:${port}`);
+    let stopping = false;
+    const instance = new PlayerServer(port, `http://${host}:${port}`, child.pid ?? null, async () => {
+      stopping = true;
+      await killChildIfAlive();
+    });
+    // 意外退出（未被 stop() 发起）= 崩溃：发 crash 事件。本监听在 ready 之后才挂上，
+    // 启动期退出由上方启动 Promise 的 exit → reject 路径处理，不经此事件
+    child.on('exit', (code, signal) => {
+      if (stopping) return;
+      const message = `子进程意外退出（code=${code} signal=${signal}）`;
+      log.error('server', message);
+      instance.emit('crash', { code, signal, message });
+    });
+    // 与本进程模式一致：start 延迟一拍，await 后挂监听不丢事件
+    setImmediate(() =>
+      instance.emit('start', { port, url: instance.url, host, childProcess: true })
+    );
+    return instance;
   } catch (err) {
     // 启动失败兜底清理，不留半启动子进程
     await killChildIfAlive();
@@ -141,6 +170,10 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
  * 启动前先解析 ffmpeg/ffprobe 路径（缺失立即抛错，不留半启动状态）。
  */
 export async function startServer(options: PlayerServerOptions = {}): Promise<PlayerServer> {
+  // 日志收口：注入自定义日志函数（不传复位为默认 console）；须最先配置，
+  // 使后续路径校验/启动过程的日志都走同一出口
+  configureLogger(options.logger);
+
   // 显式配置的路径是硬契约：路径不可用时立即报错。
   // 解析链对无效路径会静默降级到下一级（环境变量/static 包，devDeps 装了 static 包就能解析成功），
   // 但调用方明确传入的路径失效属于配置错误，不能悄悄换用别的来源
@@ -149,6 +182,7 @@ export async function startServer(options: PlayerServerOptions = {}): Promise<Pl
     ['ffprobePath', options.ffprobePath]
   ] as const) {
     if (p != null && !isExecutable(p)) {
+      log.error('server', `配置的 ${name} 不可用（文件不存在或不可执行）: ${p}`);
       throw new Error(`配置的 ${name} 不可用（文件不存在或不可执行）: ${p}`);
     }
   }

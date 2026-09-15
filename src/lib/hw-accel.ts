@@ -10,6 +10,7 @@
 //  - "<encoder 名>"   只测试该编码器，失败仍回退 libx264
 import { spawn } from 'child_process';
 import { getFfmpegPath } from './ffmpeg-path';
+import { log } from './logger';
 
 export interface Caps { encoder: string; mode: 'hybrid' | 'sw'; label: string; }
 
@@ -163,7 +164,7 @@ function verifyEncoder(encoder: string): Promise<boolean> {
       clearTimeout(timer);
       done(code === 0);
       if (code !== 0) {
-        console.warn(`[hw-accel] ${encoder} 测试编码失败: ${stderr.slice(-200).trim()}`);
+        log.warn('hw-accel', `${encoder} 测试编码失败: ${stderr.slice(-200).trim()}`);
       }
     });
   });
@@ -198,7 +199,7 @@ let cached: Promise<Caps> | null = null;
 export function getCaps(): Promise<Caps> {
   if (!cached) {
     cached = detectCaps().then((caps) => {
-      console.log(`[hw-accel] 使用编码器: ${caps.encoder} (${caps.label}, mode=${caps.mode})`);
+      log.info('hw-accel', `使用编码器: ${caps.encoder} (${caps.label}, mode=${caps.mode})`);
       return caps;
     });
   }

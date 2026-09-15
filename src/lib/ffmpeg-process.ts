@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import { getFfmpegPath } from './ffmpeg-path';
 import { ENCODER_PROFILES } from './hw-accel';
 import { normalizeLocalhostUrl } from './url';
+import { log } from './logger';
 import type { Strategy } from './stream-strategy';
 
 /**
@@ -104,15 +105,17 @@ export function buildArgs(url: string, startTime: number, strategy: Strategy): s
  * @param {string} opts.url - 视频源 URL
  * @param {number} opts.startTime - 起始时间（秒）
  * @param {object} opts.strategy - 播放策略
+ * @param {string} [opts.sessionId] - 所属会话 id（用于日志标签，日志按会话串联全生命周期）
  * @param {(chunk: Buffer) => void} opts.onData - 数据回调
  * @param {(err: Error) => void} opts.onError - 错误回调
  * @param {(code: number|null) => void} opts.onExit - 进程退出回调
  * @returns {{ pid: number, kill: () => void }}
  */
-export function createFfmpegProcess({ url, startTime, strategy, onData, onError, onExit }: {
+export function createFfmpegProcess({ url, startTime, strategy, sessionId, onData, onError, onExit }: {
   url: string;
   startTime: number;
   strategy: Strategy;
+  sessionId?: string;
   onData: (chunk: Buffer) => void;
   onError: (err: Error) => void;
   onExit: (code: number | null) => void;
@@ -123,10 +126,13 @@ export function createFfmpegProcess({ url, startTime, strategy, onData, onError,
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+  // 日志标签：进程 + 会话双标识，单看一行即可定位是哪个会话的哪次起播
+  const tag = `ffmpeg pid=${proc.pid}${sessionId ? ` session:${sessionId}` : ''}`;
+
   let killed = false;
   let stderr = '';
   const startedAt = Date.now();
-  console.log(`[ffmpeg] started pid=${proc.pid} start=${startTime}s strategy=${strategy.label || strategy.encoder || strategy.video}`);
+  log.info(tag, `started start=${startTime}s strategy=${strategy.label || strategy.encoder || strategy.video}`);
 
   proc.stdout.on('data', (chunk) => {
     if (!killed) {
@@ -140,18 +146,23 @@ export function createFfmpegProcess({ url, startTime, strategy, onData, onError,
 
   proc.on('close', (code) => {
     if (killed) {
-      console.log(`[ffmpeg] pid=${proc.pid} exited (killed) code=${code} after ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+      // 被杀（seek/换流/销毁）不记日志：紧接着的新 started 日志已隐含旧进程被替换
       return;
     }
-    console.log(`[ffmpeg] pid=${proc.pid} exited code=${code} after ${((Date.now() - startedAt) / 1000).toFixed(1)}s${code !== 0 && code !== null ? ` stderr: ${stderr.slice(-200)}` : ''}`);
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
     if (code !== 0 && code !== null) {
+      // 异常退出是排查断流的第一现场，error 级别并带出 stderr 尾部
+      log.error(tag, `exited code=${code} after ${elapsed}s stderr: ${stderr.slice(-500)}`);
       onError(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-500)}`));
+    } else {
+      log.info(tag, `exited code=${code} after ${elapsed}s`);
     }
     onExit(code);
   });
 
   proc.on('error', (err) => {
     if (killed) return;
+    log.error(tag, `spawn 失败: ${err.message}`);
     onError(new Error(`Failed to spawn ffmpeg: ${err.message}`));
   });
 

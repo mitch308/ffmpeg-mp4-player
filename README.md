@@ -59,6 +59,23 @@ await server.stop();
 
 返回的 `server.port` 是最终监听端口（显式端口被占会直接报错，不静默换端口）。
 
+### 生命周期事件
+
+`server` 实例支持事件监听（继承 EventEmitter，事件与负载有 TS 类型约束）：
+
+```js
+server.on('start', ({ port, url, host, childProcess }) => { /* 服务就绪 */ });
+server.on('stop', () => { /* 已完全停止（会话销毁/子进程已杀/监听关闭） */ });
+```
+
+| 事件 | 负载 | 触发时机 |
+|------|------|----------|
+| `start` | `{ port, url, host, childProcess }` | 服务就绪。在 `startServer` resolve 后异步发出，`await` 之后挂监听即可收到 |
+| `stop` | 无 | 首次 `stop()` 成功完成后；重复 `stop()` 幂等，不再重复发出 |
+| `crash` | `{ code, signal, message }` | 仅子进程模式：子进程意外退出（非 `stop()` 发起）时发出。本进程模式不发 `crash`（与宿主同生共死；服务层 error 走日志，进程级崩溃需宿主自行监听 `process` 事件兜底） |
+
+`stop()` 幂等：仅首次调用执行真实关闭。`off(event, listener)` 可取消监听。
+
 ## CLI
 
 ```bash
@@ -79,6 +96,9 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 | `ffmpegPath` | string | 解析链 | ffmpeg 可执行文件路径 |
 | `ffprobePath` | string | 解析链 | ffprobe 可执行文件路径 |
 | `staticPlayer` | boolean | `true` | 托管内置网页播放器（访问根路径） |
+| `logger` | function | console | 自定义日志函数 `(level: 'info'\|'warn'\|'error', message: string) => void`；消息带统一前缀 `[fmp4]`。子进程模式下同样生效：子进程日志经 IPC 转发回父进程由此函数输出 |
+
+日志统一以 `[fmp4][<组件>:<上下文>]` 开头（如 `[fmp4][session:abc123]`、`[fmp4][ffmpeg pid=1 session:abc123]`、`[fmp4][client ...]`），按会话 id grep 即可串联前后端全链路。前端播放器日志除浏览器 console 外，还会经 `POST /api/logs` 上报到服务端统一输出。
 
 ## HTTP API
 
@@ -88,6 +108,7 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 - `GET /api/sessions/:id/stream?start=秒` → fMP4 流（`video/mp4`）；可选 query 参数 `quality` / `mode`，语义同上，合法值持久化到会话（后续流请求沿用）
 - `DELETE /api/sessions/:id` → 销毁会话
 - `GET /api/status` → `{ activeSessions, hw: { encoder, label, mode } }`
+- `POST /api/logs` — 前端播放器日志批量上报。请求体 `{ entries: [{ level, tag, message }] }`（单批 ≤100 条，message 截断 2000 字符），服务端经统一 logger 以 `[fmp4][client <tag>]` 前缀输出
 
 `POST /api/sessions` 响应字段：
 

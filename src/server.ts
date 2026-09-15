@@ -15,6 +15,7 @@ import {
 } from './lib/session-manager';
 import { parseQuality, parseMode, availableQualities } from './lib/quality';
 import { getCaps } from './lib/hw-accel';
+import { log, type LogLevel } from './lib/logger';
 
 // 兼容两种运行位置：src/server.ts（vitest）→ 仓库根/public；dist/index.mjs|index.cjs → 包根/public
 // CJS 产物中 esbuild 把 import.meta 垫成空对象（import.meta.url → undefined），退回 __filename
@@ -70,10 +71,11 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
           error: `quality ${q} 不可用（源 ${session.probeResult.width}x${session.probeResult.height}）`
         });
       }
-      console.log(
-        `Session created: ${session.id} for ${url} ` +
-        `(strategy=${currentStrategy(session).label}, codec=${session.probeResult.codec}/${session.probeResult.pixFmt}, ` +
-        `quality=${q}, mode=${m})`
+      log.info(
+        `session:${session.id}`,
+        `创建 url=${url} strategy=${currentStrategy(session).label}` +
+        ` codec=${session.probeResult.codec}/${session.probeResult.pixFmt}` +
+        ` quality=${q} mode=${m}`
       );
 
       const strategy = currentStrategy(session);
@@ -97,7 +99,7 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
         requestedMode: m
       });
     } catch (err) {
-      console.error('Failed to create session:', (err as Error).message);
+      log.error('session', `创建失败: ${(err as Error).message}`);
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -132,7 +134,6 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
     res.setHeader('Content-Type', 'video/mp4');
 
     let isClientConnected = true;
-    console.log(`Stream start: session=${session.id}, start=${startTime}`);
 
     const myProc = startStream(
       session,
@@ -143,7 +144,7 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
         }
       },
       (err) => {
-        console.error(`Stream error for session ${session.id}:`, err.message);
+        log.error(`session:${session.id}`, `流错误: ${err.message}`);
         if (isClientConnected && !res.writableEnded) {
           res.end();
         }
@@ -172,8 +173,7 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
     }
-    destroySession(req.params.id);
-    console.log(`Session destroyed: ${req.params.id}`);
+    destroySession(req.params.id, '客户端请求');
     res.json({ ok: true });
   });
 
@@ -188,6 +188,28 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
         mode: caps.mode
       }
     });
+  });
+
+  // 前端日志上报：浏览器端播放器日志（console 输出的同一份）批量发到这里，
+  // 经统一 logger 以 [fmp4][client <tag>] 前缀输出，服务端一处看全前后端日志
+  app.post('/api/logs', (req, res) => {
+    const { entries } = (req.body ?? {}) as {
+      entries?: Array<{ level?: string; tag?: string; message?: string }>;
+    };
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: 'entries is required' });
+    }
+    // 上限防御：单批最多 100 条，单条消息截断到 2000 字符，防止异常客户端刷屏
+    const batch = entries.slice(0, 100);
+    for (const e of batch) {
+      const level: LogLevel =
+        e.level === 'warn' || e.level === 'error' ? e.level : 'info';
+      const tag = typeof e.tag === 'string' && e.tag ? e.tag : 'player';
+      const message = typeof e.message === 'string' ? e.message.slice(0, 2000) : '';
+      if (!message) continue;
+      log[level](`client ${tag}`, message);
+    }
+    res.json({ ok: true });
   });
 
   return app;
