@@ -66,15 +66,34 @@ await server.stop();
 ```js
 server.on('start', ({ port, url, host, childProcess }) => { /* 服务就绪 */ });
 server.on('stop', () => { /* 已完全停止（会话销毁/子进程已杀/监听关闭） */ });
+server.on('idle', () => { /* 进入空闲：无任何会话且持续 10s 确认期 */ });
+server.on('busy', () => { /* 从空闲态恢复繁忙：新会话接入 */ });
+server.on('crash', ({ code, signal, message }) => { /* 子进程意外退出 */ });
 ```
 
 | 事件 | 负载 | 触发时机 |
 |------|------|----------|
 | `start` | `{ port, url, host, childProcess }` | 服务就绪。在 `startServer` resolve 后异步发出，`await` 之后挂监听即可收到 |
 | `stop` | 无 | 首次 `stop()` 成功完成后；重复 `stop()` 幂等，不再重复发出 |
+| `idle` | 无 | 无任何会话且持续 10s 确认期（吸收"关旧页开新页"的会话间隙）。边缘触发：恢复繁忙后重新武装。播放暂停/断连不算空闲（会话仍存在，见 `server.isIdle()` 与自动清理语义） |
+| `busy` | 无 | 从已确认的空闲态出现新会话时立即发出；确认期内创建会话不算（从未离开过繁忙态） |
 | `crash` | `{ code, signal, message }` | 仅子进程模式：子进程意外退出（非 `stop()` 发起）时发出。本进程模式不发 `crash`（与宿主同生共死；服务层 error 走日志，进程级崩溃需宿主自行监听 `process` 事件兜底） |
 
-`stop()` 幂等：仅首次调用执行真实关闭。`off(event, listener)` 可取消监听。
+`stop()` 幂等：仅首次调用执行真实关闭。`off(event, listener)` 可取消监听。`server.isIdle()` 同步查询当前是否处于已确认空闲态（确认期内返回 `false`）。
+
+### 状态查询
+
+`await server.getStatus()` 返回服务状态快照（不依赖事件，随时主动查询）：
+
+| 字段 | 说明 |
+|---|---|
+| `port` / `url` / `pid` | 监听端口 / 地址 / 子进程 pid（本进程模式为 `null`） |
+| `childProcess` | 是否子进程模式 |
+| `stopped` | 是否已 `stop()` |
+| `idle` | 是否已确认空闲（同 `isIdle()`） |
+| `activeSessions` | 当前会话数（子进程模式经 IPC 同步，毫秒级滞后） |
+| `hw` | `{ encoder, label, mode }` 硬件编码能力 |
+| `uptimeSec` | 运行时长（秒） |
 
 ## CLI
 
@@ -97,6 +116,9 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 | `ffprobePath` | string | 解析链 | ffprobe 可执行文件路径 |
 | `staticPlayer` | boolean | `true` | 托管内置网页播放器（访问根路径） |
 | `logger` | function | console | 自定义日志函数 `(level: 'info'\|'warn'\|'error', message: string) => void`；消息带统一前缀 `[fmp4]`。子进程模式下同样生效：子进程日志经 IPC 转发回父进程由此函数输出 |
+| `readHighWaterSec` | number | `45` | 前端读泵高水位（秒）：缓冲领先播放头超过该值暂停读取，防撑爆 MSE 配额。需大于低水位且 ≤600 |
+| `readLowWaterSec` | number | `15` | 前端读泵低水位（秒）：缓冲领先回落到该值以下恢复读取。非法配置启动即报错 |
+| `connectionKeepAliveSec` | number | `30` | 服务端 TCP keepalive 起始空闲时长（秒），`0` 显式禁用。用于清理网络级静默死亡（断电/拔网线/休眠）的半开连接，防 ffmpeg 残留；健康连接（含长暂停）不受影响。探测间隔/次数取 OS 默认 |
 
 日志统一以 `[fmp4][<组件>:<上下文>]` 开头（如 `[fmp4][session:abc123]`、`[fmp4][ffmpeg pid=1 session:abc123]`、`[fmp4][client ...]`），按会话 id grep 即可串联前后端全链路。前端播放器日志除浏览器 console 外，还会经 `POST /api/logs` 上报到服务端统一输出。
 
@@ -108,6 +130,7 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 - `GET /api/sessions/:id/stream?start=秒` → fMP4 流（`video/mp4`）；可选 query 参数 `quality` / `mode`，语义同上，合法值持久化到会话（后续流请求沿用）
 - `DELETE /api/sessions/:id` → 销毁会话
 - `GET /api/status` → `{ activeSessions, hw: { encoder, label, mode } }`
+- `GET /api/player-config` → `{ readHighWaterSec, readLowWaterSec }`（播放器读泵水位线，源自启动配置）
 - `POST /api/logs` — 前端播放器日志批量上报。请求体 `{ entries: [{ level, tag, message }] }`（单批 ≤100 条，message 截断 2000 字符），服务端经统一 logger 以 `[fmp4][client <tag>]` 前缀输出
 
 `POST /api/sessions` 响应字段：
@@ -145,6 +168,8 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 | `autoplay` | `1` | 自动播放；无手势策略可能拦截，用户点一下播放即可 |
 | `volume` | `1` | 初始音量：`0`~`1`（小数，如 `0.5`）或 `1`~`100`（百分数，如 `50`） |
 | `mute` | `0` | `1` 静音起播，点音量图标/条解除 |
+| `highwater` | 服务端配置 | 读泵高水位（秒）：覆盖 `/api/player-config` 下发的值 |
+| `lowwater` | 服务端配置 | 读泵低水位（秒）：覆盖 `/api/player-config` 下发的值；非法组合（low ≥ high）整体回退默认 |
 
 ### 画质阶梯
 

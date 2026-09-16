@@ -16,6 +16,7 @@ import {
 import { parseQuality, parseMode, availableQualities } from './lib/quality';
 import { getCaps } from './lib/hw-accel';
 import { log, type LogLevel } from './lib/logger';
+import { DEFAULT_READ_HIGH_WATER_SEC, DEFAULT_READ_LOW_WATER_SEC } from './config';
 
 // 兼容两种运行位置：src/server.ts（vitest）→ 仓库根/public；dist/index.mjs|index.cjs → 包根/public
 // CJS 产物中 esbuild 把 import.meta 垫成空对象（import.meta.url → undefined），退回 __filename
@@ -31,7 +32,11 @@ const publicDir = path.resolve(here, '../public');
 // server.test 的 dist/client 断言也随之空转。
 const clientDir = [path.resolve(here, '../dist/client')].find((p) => existsSync(p));
 
-export function createApp(options: { staticPlayer?: boolean } = {}): Express {
+export function createApp(options: {
+  staticPlayer?: boolean;
+  /** 读泵水位线（秒），经 /api/player-config 下发给前端播放器 */
+  playerConfig?: { readHighWaterSec: number; readLowWaterSec: number };
+} = {}): Express {
   const app = express();
 
   // 启动即探测硬件能力（结果缓存，供会话决策与状态查询）
@@ -175,6 +180,15 @@ export function createApp(options: { staticPlayer?: boolean } = {}): Express {
     }
     destroySession(req.params.id, '客户端请求');
     res.json({ ok: true });
+  });
+
+  // 播放器运行配置：读泵水位线（前端 pumpReader 据此暂停/恢复读取）。
+  // startServer 未定制时返回默认值，前端以其为兜底
+  app.get('/api/player-config', (_req, res) => {
+    res.json({
+      readHighWaterSec: options.playerConfig?.readHighWaterSec ?? DEFAULT_READ_HIGH_WATER_SEC,
+      readLowWaterSec: options.playerConfig?.readLowWaterSec ?? DEFAULT_READ_LOW_WATER_SEC
+    });
   });
 
   // 健康检查

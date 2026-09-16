@@ -8,12 +8,14 @@
 //   seek/换档必须重建 MediaSource（timestampOffset 对齐原片位置）。
 // - pumpReader 水位线（45s 暂停 / 15s 恢复）不能删：转码快于实时，无水位线会
 //   撑爆 MSE 配额 → QuotaExceededError 静默丢 chunk → buffered 空洞永久卡死。
-// - 流中断走自动恢复（连续 4 次失败才报错）：长片瞬时网络抖动是常态。
+// - 流中断走自动恢复（同会话重连 → 连续失败达阈值/404 时重建会话，指数退避约 47s 窗口）：
+//   长片瞬时网络抖动、后台服务重启均不应终局。
 //
 // 日志：经 client/logger.ts 双通道输出（console + 上报 /api/logs 服务端统一落盘），
 // 统一前缀 [fmp4][player:<sessionId>]，与服务端日志按会话串联。
 
 import { clientLog } from './logger';
+import { recoveryDelayMs, REBUILD_AFTER_FAILURES, RECOVERY_LIMIT } from './recovery';
 
 export type QualityId = 'origin' | '720p' | '1080p' | '2k';
 export type ModeId = 'auto' | 'hw' | 'sw';
@@ -30,6 +32,15 @@ export interface SessionMeta {
   encoder: string | null;
   qualities: QualityId[];
   hwAvailable: boolean;
+}
+
+export interface PlayerCoreCreateOptions {
+  quality?: QualityId;
+  mode?: ModeId;
+  /** 读泵高水位（秒）：缓冲领先播放头超过该值暂停读取，默认 45 */
+  readHighWaterSec?: number;
+  /** 读泵低水位（秒）：缓冲领先回落到该值以下恢复读取，默认 15 */
+  readLowWaterSec?: number;
 }
 
 export interface PlayerCoreCallbacks {
@@ -51,6 +62,11 @@ const VIDEO_CODECS = [
   'avc1.640032', // High 5.0
   'avc1.640033'  // High 5.1
 ];
+
+// 读泵默认水位线（秒），与 src/config.ts 的 DEFAULT_READ_*_WATER_SEC 保持一致
+// （config.ts 含 Node 依赖不可跨端引入，两端数值勿单方面改动）
+const DEFAULT_READ_HIGH_WATER_SEC = 45;
+const DEFAULT_READ_LOW_WATER_SEC = 15;
 
 function pickCodec(hasAudio: boolean): string {
   const suffix = hasAudio ? ',mp4a.40.2' : '';
@@ -75,13 +91,17 @@ function formatTime(s: number): string {
 
 export class PlayerCore {
   readonly video: HTMLVideoElement;
-  readonly meta: SessionMeta;
+  // 会话可因服务重启而重建（恢复路径），meta 非只读；sessionId 更新后 logTag 同步刷新
+  meta: SessionMeta;
   quality: QualityId;
   mode: ModeId;
 
   private cb: PlayerCoreCallbacks;
+  private sourceUrl: string;       // 原始源地址：服务重启后会话失效时重建会话用
   private gen = 0;                 // 代次令牌，使在途异步操作失效
   private logTag: string;          // 日志标签：player:<sessionId>
+  private readHighWaterSec: number;
+  private readLowWaterSec: number;
   private mediaSource: MediaSource | null = null;
   private sourceBuffer: SourceBuffer | null = null;
   private objectURL: string | null = null;
@@ -93,12 +113,26 @@ export class PlayerCore {
   private networkFailStreak = 0;   // 连续网络失败次数（收到数据即清零）
   private destroyed = false;
 
-  private constructor(meta: SessionMeta, quality: QualityId, mode: ModeId, cb: PlayerCoreCallbacks) {
+  private constructor(
+    sourceUrl: string,
+    meta: SessionMeta,
+    quality: QualityId,
+    mode: ModeId,
+    water: { readHighWaterSec: number; readLowWaterSec: number },
+    cb: PlayerCoreCallbacks
+  ) {
+    this.sourceUrl = sourceUrl;
     this.meta = meta;
     this.quality = quality;
     this.mode = mode;
     this.cb = cb;
     this.logTag = 'player:' + meta.sessionId;
+    // 水位线契约（勿删）：low 必须小于 high，非法配置整体回退默认值——
+    // 没有水位线会撑爆 Chrome MSE 配额导致静默卡死（见 AGENTS.md 踩坑记录）
+    const { readHighWaterSec: h, readLowWaterSec: l } = water;
+    const valid = Number.isFinite(h) && Number.isFinite(l) && h > 0 && l > 0 && l < h;
+    this.readHighWaterSec = valid ? h : DEFAULT_READ_HIGH_WATER_SEC;
+    this.readLowWaterSec = valid ? l : DEFAULT_READ_LOW_WATER_SEC;
     this.video = document.createElement('video');
     this.video.preload = 'auto';
     this.bindVideoEvents();
@@ -108,7 +142,7 @@ export class PlayerCore {
   /** 创建会话（POST /api/sessions）并构造播放核心 */
   static async create(
     url: string,
-    opts: { quality?: QualityId; mode?: ModeId } = {},
+    opts: PlayerCoreCreateOptions = {},
     cb: PlayerCoreCallbacks = {}
   ): Promise<PlayerCore> {
     const resp = await fetch('/api/sessions', {
@@ -125,9 +159,17 @@ export class PlayerCore {
       'player:' + meta.sessionId,
       `会话创建 ${meta.width}x${meta.height} codec=${meta.codec}/${meta.pixFmt}` +
       ` audio=${meta.audioCodec ?? '无'} strategy=${meta.streamMode}(${meta.encoder ?? '-'})` +
-      ` quality=${opts.quality ?? 'origin'} mode=${opts.mode ?? 'auto'} duration=${meta.duration}s`
+      ` quality=${opts.quality ?? 'origin'} mode=${opts.mode ?? 'auto'} duration=${meta.duration}s` +
+      ` water=${opts.readHighWaterSec ?? DEFAULT_READ_HIGH_WATER_SEC}/${opts.readLowWaterSec ?? DEFAULT_READ_LOW_WATER_SEC}s`
     );
-    return new PlayerCore(meta, opts.quality ?? 'origin', opts.mode ?? 'auto', cb);
+    return new PlayerCore(
+      url,
+      meta,
+      opts.quality ?? 'origin',
+      opts.mode ?? 'auto',
+      { readHighWaterSec: opts.readHighWaterSec ?? DEFAULT_READ_HIGH_WATER_SEC, readLowWaterSec: opts.readLowWaterSec ?? DEFAULT_READ_LOW_WATER_SEC },
+      cb
+    );
   }
 
   // ===== 对 UI 暴露的动作 =====
@@ -262,7 +304,13 @@ export class PlayerCore {
     fetch(url, { signal: this.abortController.signal })
       .then(resp => {
         if (myGen !== this.gen) return;
-        if (!resp.ok) { this.fail('流请求失败: HTTP ' + resp.status); return; }
+        if (!resp.ok) {
+          // HTTP 错误也走恢复链：404 = 服务重启后会话失效（重建会话即可恢复播放），
+          // 5xx = 服务端临时故障。此前直接终态 fail，服务一重启播放就报废
+          clientLog.warn(this.logTag, `流请求失败: HTTP ${resp.status}，进入恢复流程`);
+          this.handleStreamFailure(myGen, resp.status === 404);
+          return;
+        }
         if (!resp.body) { this.fail('浏览器不支持流式响应'); return; }
         return this.pumpReader(resp.body.getReader(), myGen);
       })
@@ -273,25 +321,65 @@ export class PlayerCore {
   }
 
   // 流中断自动恢复：长片播放中瞬时网络抖动（切后台被系统切断、休眠唤醒等）不应终局。
-  // 从当前播放位置重建流（与 seek 同路径），连续失败超限才报错
-  private handleStreamFailure(myGen: number): void {
+  // 先同会话重连（服务端会话仍在）；连续失败达阈值或会话失效（服务重启，404）时
+  // 用保留的 sourceUrl 重建会话，从当前播放位置继续。指数退避，覆盖服务重启窗口
+  private handleStreamFailure(myGen: number, sessionGone = false): void {
     if (myGen !== this.gen) return; // 已有新流接管（如用户 seek）
-    if (this.networkFailStreak >= 4) {
+    if (this.networkFailStreak >= RECOVERY_LIMIT) {
       this.fail('流中断且自动恢复失败，请重新加载');
       return;
     }
     this.networkFailStreak++;
     const resumeAt = this.video.currentTime;
     const wasPlaying = !this.video.paused && !this.video.ended;
-    clientLog.warn(this.logTag, `流中断，第 ${this.networkFailStreak}/4 次自动恢复，从 ${resumeAt}s 继续`);
+    const rebuild = sessionGone || this.networkFailStreak >= REBUILD_AFTER_FAILURES;
+    const delay = recoveryDelayMs(this.networkFailStreak);
+    clientLog.warn(
+      this.logTag,
+      `流中断，第 ${this.networkFailStreak}/${RECOVERY_LIMIT} 次恢复` +
+      `（${rebuild ? '重建会话' : '同会话重连'}，${delay}ms 后），从 ${resumeAt}s 继续`
+    );
     this.cb.onStatus?.('连接中断，正在从 ' + formatTime(resumeAt) + ' 恢复…');
     this.cb.onLoading?.(true);
     setTimeout(() => {
       if (myGen !== this.gen) return; // 期间发生了 seek/重建
-      this.teardownMediaSource();
-      this.autoPlay = wasPlaying;
-      this.startStreamAt(resumeAt);
-    }, 1000);
+      if (!rebuild) {
+        this.teardownMediaSource();
+        this.autoPlay = wasPlaying;
+        this.startStreamAt(resumeAt);
+        return;
+      }
+      this.rebuildSession(myGen, resumeAt, wasPlaying).catch((e: Error) => {
+        if (myGen !== this.gen) return;
+        clientLog.warn(this.logTag, `会话重建失败: ${e.message}`);
+        this.handleStreamFailure(myGen); // 递归：沿退避节奏重试
+      });
+    }, delay);
+  }
+
+  /** 用原始源地址重建会话并从断点继续（服务重启/会话失效恢复路径） */
+  private async rebuildSession(
+    myGen: number,
+    resumeAt: number,
+    wasPlaying: boolean
+  ): Promise<void> {
+    const resp = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: this.sourceUrl, quality: this.quality, mode: this.mode })
+    });
+    if (myGen !== this.gen) return;
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}) as { error?: string });
+      throw new Error(err.error || 'HTTP ' + resp.status);
+    }
+    const meta = await resp.json() as SessionMeta;
+    clientLog.info('player:' + meta.sessionId, `会话重建成功，从 ${resumeAt}s 恢复播放`);
+    this.meta = meta;
+    this.logTag = 'player:' + meta.sessionId;
+    this.teardownMediaSource();
+    this.autoPlay = wasPlaying;
+    this.startStreamAt(resumeAt);
   }
 
   private pumpReader(reader: ReadableStreamDefaultReader<Uint8Array>, myGen: number): void {
@@ -299,8 +387,9 @@ export class PlayerCore {
     // 传导，ffmpeg 阻塞在写出上，全链路不再堆积。没有它 4x 实时的转码速度会
     // 撑爆 Chrome MSE 配额（约 150MB），之后 QuotaExceededError 静默丢 chunk，
     // buffered 出现空洞，播放头撞洞后永久卡死。
-    const READ_HIGH_WATER = 45; // 领先播放头超过该秒数 → 暂停读取
-    const READ_LOW_WATER = 15;  // 领先回落到该秒数以下 → 恢复读取
+    // 数值可由服务端 /api/player-config 与 URL 参数配置（见 PlayerCoreCreateOptions）
+    const READ_HIGH_WATER = this.readHighWaterSec; // 领先播放头超过该秒数 → 暂停读取
+    const READ_LOW_WATER = this.readLowWaterSec;   // 领先回落到该秒数以下 → 恢复读取
 
     const bufferedAhead = (): number => {
       const b = this.video.buffered;

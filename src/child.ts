@@ -1,10 +1,12 @@
 // src/child.ts — 子进程模式入口：由父进程 fork，通过 IPC 回报端口
 // 父进程通过环境变量 FFMPEG_PLAYER_CHILD_OPTIONS 传入 JSON 序列化的启动配置
 import { startInProcess } from './index';
-import { PlayerServerOptions } from './config';
+import { PlayerServerOptions, resolveWaterConfig, resolveKeepAliveSec } from './config';
 import { configureBinaries, getFfmpegPath, getFfprobePath, isExecutable } from './lib/ffmpeg-path';
 import { configureLogger, type LogLevel } from './lib/logger';
 import { createSafeIpcSender } from './lib/ipc-safe';
+import { getCaps } from './lib/hw-accel';
+import { onSessionCountChange } from './lib/session-manager';
 
 // IPC 安全发送：消息不可序列化 / 通道关闭竞态时降级或静默，绝不抛错杀死子进程
 const sendIpc = createSafeIpcSender(
@@ -55,6 +57,9 @@ try {
       fail(`配置的 ${name} 不可用（文件不存在或不可执行）: ${p}`);
     }
   }
+  // 水位线/keepalive 配置校验与父进程 startServer 同镜像（子进程可被直接 fork，此处是权威校验点）
+  resolveWaterConfig(options);
+  resolveKeepAliveSec(options);
   configureBinaries({
     ffmpegPath: options.ffmpegPath ?? null,
     ffprobePath: options.ffprobePath ?? null
@@ -65,10 +70,20 @@ try {
   fail(`子进程二进制路径校验失败: ${(err as Error).message}`);
 }
 
-// 此处模块级 override 已就位，startInProcess 内部的解析链读到的是本子进程的配置
+// 此处模块级 override 已就位，startInProcess 内部的解析链读到的是本子进程的配置。
+// 空闲状态机在子进程内运行：状态转变经 IPC 上报父进程发事件；
+// 确认延迟可经环境变量注入（测试用），未设置走默认值
 configureIpcLogger();
-startInProcess(options)
-  .then((server) => {
-    process.send?.({ type: 'ready', port: server.port });
+const envConfirm = Number(process.env.FFMPEG_PLAYER_IDLE_CONFIRM_MS);
+// 会话数变化持续上报（含订阅时的当前值），供父进程 getStatus() 展示
+const unsubSessionCount = onSessionCountChange((count) => sendIpc({ type: 'sessions', count }));
+startInProcess(options, {
+  onIdleChange: (idle) => sendIpc({ type: 'idle', idle }),
+  idleConfirmMs: Number.isFinite(envConfirm) && envConfirm > 0 ? envConfirm : undefined
+})
+  .then(async (server) => {
+    // 硬件能力随 ready 一次性上报（createApp 启动时已探测缓存）
+    const hw = await getCaps();
+    sendIpc({ type: 'ready', port: server.port, hw });
   })
   .catch((err: Error) => fail(`子进程启动失败: ${err.message}`));

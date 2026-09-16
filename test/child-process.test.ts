@@ -8,7 +8,10 @@ import { getSessionCount } from '../src/lib/session-manager';
 import { ensureSamples } from './helpers/samples';
 
 let server: Awaited<ReturnType<typeof startServer>> | null = null;
-afterEach(async () => { if (server) { await server.stop(); server = null; } });
+afterEach(async () => {
+  delete process.env.FFMPEG_PLAYER_IDLE_CONFIRM_MS; // 复位，避免污染其他测试
+  if (server) { await server.stop(); server = null; }
+});
 
 describe('startServer 子进程模式', () => {
   test('启动返回端口且服务可用', async () => {
@@ -107,6 +110,56 @@ describe('startServer 子进程模式', () => {
     await new Promise((r) => setTimeout(r, 500));
     expect(crashed).toBe(false);
     server = null;
+  });
+
+  test('子进程模式 idle/busy 事件经 IPC 上报父进程', async () => {
+    // 确认延迟经环境变量注入子进程（子进程是独立模块实例，ForTests 钩子跨不过去）
+    process.env.FFMPEG_PLAYER_IDLE_CONFIRM_MS = '300';
+    server = await startServer({ childProcess: true, port: 0 });
+    const events: string[] = [];
+    server.on('idle', () => events.push('idle'));
+    server.on('busy', () => events.push('busy'));
+    const waitFor = async (cond: () => boolean) => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && !cond()) await new Promise((r) => setTimeout(r, 100));
+      expect(cond()).toBe(true);
+    };
+
+    await waitFor(() => events.includes('idle')); // 启动无会话 → 空闲
+    expect(server.isIdle()).toBe(true);
+
+    const samples = ensureSamples();
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    const { sessionId } = (await create.json()) as { sessionId: string };
+    await waitFor(() => events.includes('busy')); // 会话接入 → 繁忙
+    expect(events).toEqual(['idle', 'busy']);
+    expect(server.isIdle()).toBe(false);
+
+    await fetch(`${server.url}/api/sessions/${sessionId}`, { method: 'DELETE' });
+    await waitFor(() => events.length === 3); // 销毁 → 再次空闲
+    expect(events).toEqual(['idle', 'busy', 'idle']);
+    expect(server.isIdle()).toBe(true);
+  });
+
+  test('子进程模式 getStatus()：pid/childProcess 正确，会话数经 IPC 同步', async () => {
+    server = await startServer({ childProcess: true, port: 0 });
+    const samples = ensureSamples();
+    const create = await fetch(`${server.url}/api/sessions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: samples.h264Aac })
+    });
+    expect(create.ok).toBe(true);
+    // 等待 'sessions' IPC 消息送达父进程缓存
+    await new Promise((r) => setTimeout(r, 500));
+    const st = await server.getStatus();
+    expect(st.childProcess).toBe(true);
+    expect(st.pid).not.toBeNull();
+    expect(st.activeSessions).toBe(1);
+    expect(st.hw.encoder).toBeTruthy();
+    expect(st.stopped).toBe(false);
   });
 
   test('显式 ffmpegPath 无效时 startServer 拒绝启动（父进程预校验，session 数保持 0）', async () => {

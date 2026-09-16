@@ -18,7 +18,10 @@
 调用链：`src/index.ts`（startServer API）→ `src/server.ts`（Express app 工厂）→ `src/lib/session-manager.ts`（内存 sessions Map，5 分钟空闲清理）→ `src/lib/ffmpeg-process.ts`（spawn；fMP4 通过 stdout 输出）。子进程模式经 `src/child.ts` fork + IPC 回报端口；杀进程树统一走 `src/lib/kill-tree.ts`。
 
 - 日志统一走 `src/lib/logger.ts`：格式恒为 `[fmp4][<组件>:<上下文>] <消息>`，服务端禁止直接 `console.*`；`startServer({ logger })` 可注入自定义日志函数，子进程模式经 IPC（`type:'log'` 消息）转发回父进程统一输出——IPC 发送必须走 `src/lib/ipc-safe.ts`（不可序列化消息/通道竞态会抛错杀死子进程）。前端日志在 `src/client/logger.ts`（console + 批量 POST /api/logs），与服务端同一前缀体系。
-- `startServer` 返回 `PlayerServer`（`src/config.ts`，继承 EventEmitter）：`start`/`stop`/`crash` 生命周期事件，on/once/off 有 TS 类型约束。`start` 在 resolve 后用 setImmediate 延迟一拍发出（保证 await 后挂监听不丢）；`stop()` 幂等，仅首次真实关闭并发事件；`crash` 仅子进程模式（子进程意外退出，`stopping` 标志排除 stop() 发起的退出）——本进程模式不发 crash，http server 运行期 error 只走 error 日志。
+- `startServer` 返回 `PlayerServer`（`src/config.ts`，继承 EventEmitter）：`start`/`stop`/`idle`/`busy`/`crash` 生命周期事件，on/once/off 有 TS 类型约束。`start` 在 resolve 后用 setImmediate 延迟一拍发出（保证 await 后挂监听不丢）；`stop()` 幂等，仅首次真实关闭并发事件；`crash` 仅子进程模式（子进程意外退出，`stopping` 标志排除 stop() 发起的退出）——本进程模式不发 crash，http server 运行期 error 只走 error 日志。
+- 空闲/繁忙状态机在 `src/lib/idle-monitor.ts`：口径 = **无任何会话**（暂停/断连期间会话存在，不误判，`test/pause-alive.test.ts` 锁定），Map 变空后经 10s 确认期发 `idle`（边缘触发），IDLE 态新会话立即发 `busy`；确认期内建会不产生状态转变。本进程模式由 `startInProcess` 内接线；子进程模式状态机跑在子进程内，状态转变经 IPC（`type:'idle'`）上报父进程发事件，确认延迟经环境变量 `FFMPEG_PLAYER_IDLE_CONFIRM_MS` 注入（测试用）。会话数量变化通知走 `session-manager.onSessionCountChange`（多订阅，返回退订函数），monitor 订阅后必须立即评估初始会话数（启动空转也要进确认期）。**子进程模式 idle 消息可能先于 ready 到达**（确认期短于子进程硬件探测时长）：父进程缓存 pendingIdle，实例就绪后 setImmediate 延迟一拍补发（直接补发会在 startServer resolve 前发事件，调用方挂不上监听）。
+- `server.getStatus()` 状态快照（`src/config.ts` 的 `PlayerServerStatus`）：port/url/pid/childProcess/stopped/idle/activeSessions/hw/uptimeSec。子进程模式的会话数由子进程经 IPC（`type:'sessions'`）持续上报缓存，硬件能力随 ready 消息一次性携带（缺失回退父进程自行探测）。
+- 读泵水位线（`PlayerServerOptions.readHighWaterSec/readLowWaterSec`，默认 45/15）经 `resolveWaterConfig` 校验（0 < low < high ≤ 600，非法抛错），由 `GET /api/player-config` 下发前端；播放器页 URL 参数 `highwater`/`lowwater` 可逐页覆盖，非法组合整体回退默认。水位线可配但不可删（AGENTS.md 踩坑记录），两端默认值常量保持一致勿单方面改动。
 
 - `src/lib/stream-strategy.ts` 和 `ffmpeg-process.ts` 里的 `buildArgs` 是纯函数——新的决策逻辑放在这里，便于单测。
 - 每个会话的策略链：copy（remux 直通）→ hw（硬编）→ sw（软编），只在策略**尚未输出任何字节**时失败才降级（把两份 fMP4 混进同一响应流会损坏数据）。
@@ -39,7 +42,8 @@
 - QSV 硬解必须用显式解码器（`-c:v hevc_qsv` 等，见 `src/lib/hw-accel.ts` 的 `decoderByCodec`），不要用 `-hwaccel qsv` 提示：提示路径 + 硬件编码器组合存在每帧表面泄漏（内存 ~48MB/s 增长，数分钟后 ffmpeg 无声崩溃，表现为播放中途断流且无任何日志）；显式解码器稳定且约 3-4x 实时。其他厂商（nvenc/amf）未经本机验证，暂保留 -hwaccel 提示。
 - 客户端 `pumpReader` 的水位线（45s 暂停 / 15s 恢复）不能删：转码速度远快于实时，若无水位线会撑爆 Chrome MSE 配额（4K 片约 117 秒 ≈ 150MB），之后 appendBuffer 连续 QuotaExceededError 走静默丢 chunk 分支，buffered 出现空洞、播放头撞洞永久卡死（表现为"播放到某处停止且无任何报错"）。
 - QSV 路径缩放必须用普通 `scale`，不要用 `scale_qsv`：后者运行时损坏（"Impossible to convert between the formats"+"Function not implemented"）；普通 scale + 显式 qsv 解码器可用（get_format 协商让解码器输出系统内存帧，硬解仍生效）。结论基于 ffmpeg 6.1.1 实测，升级 7.x 需复验（见 `src/lib/hw-accel.ts` 的 `scaleHwFilter` 注释）。
-- 客户端流中断走自动恢复（`handleStreamFailure`：从当前播放位置重建流，连续 4 次失败才报错），不要改回直接 setError：数小时长片播放中瞬时网络抖动（切后台被系统/浏览器切断、休眠唤醒等）是常态，终态报错等于播放报废。
+- 客户端流中断走自动恢复（`handleStreamFailure`：先同会话重连，连续失败达阈值或遇 404 时用保留的 sourceUrl **重建会话**，指数退避约 47s 窗口，参数在 `src/client/recovery.ts` 纯函数），不要改回直接 setError：数小时长片播放中瞬时网络抖动（切后台被系统/浏览器切断、休眠唤醒等）与服务重启（宿主监听 crash 后重启，客户端重试自动接上）都不应终局报废播放。HTTP 错误（404/5xx）也走恢复链而非终态 fail。
+- 半开连接清理：网络级静默死亡（断电/拔网线/休眠，无 FIN/RST）时暂停中的流连接在应用层完全静默，探测不到对端死亡，且 scheduleCleanup 见 process 非空无限续期——ffmpeg 会残留到 server.stop()（`test/pause-alive.test.ts` 半开用例固化）。修复 = 服务端 TCP keepalive（`src/lib/tcp-keepalive.ts`，`connectionKeepAliveSec` 选项，默认 30s，0 禁用）：内核代替应用 ACK 探测包，健康长暂停不受影响，死亡后走 req close 清理链。同机无法端到端复现内核级死亡探测（同机内核会代替死亡方 ACK 探测包），keepalive 测试只验证接线。
 
 ## 测试
 
