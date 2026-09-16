@@ -3,6 +3,11 @@
   "version": "1.2.0",
   "description": "Web video player powered by ffmpeg with MSE streaming (embeddable npm package)",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "http://npm.etsme.com",
+    "access": "public",
+    "publicPath": "/-/web/detail"
+  },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",

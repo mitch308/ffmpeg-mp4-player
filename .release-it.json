@@ -10,7 +10,6 @@
   },
   "npm": {
     "publish": true,
-    "publishArgs": ["--access", "public"],
     "skipChecks": true
   },
   "plugins": {
