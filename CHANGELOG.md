@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.0](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.1.0...v1.2.0) (2026-09-16)
+
+### Features
+
+* 服务崩溃重启后播放自动恢复（客户端会话重建） ([9fdb41e](https://github.com/mitch308/ffmpeg-mp4-player/commit/9fdb41e3a5356ade58f00e6f5cdcaac6d7ffc122))
+* idle/busy 生命周期事件、getStatus() 状态快照、读泵水位线可配置 ([3112e74](https://github.com/mitch308/ffmpeg-mp4-player/commit/3112e74cbb424a1627f752d3315e24b7397841bc))
+
+### Bug Fixes
+
+* 服务端 TCP keepalive 清理半开连接，防 ffmpeg 残留 ([5296909](https://github.com/mitch308/ffmpeg-mp4-player/commit/52969095245c4eac0a45501e9bb2ecdc283efaea))
+
 ## 1.1.0 (2026-09-15)
 
 ### Features
