@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.3](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.2...v1.2.3) (2026-09-17)
+
+### Features
+
+* postMessage 上报控制栏显隐状态（controllerchange，边沿触发） ([8662010](https://github.com/mitch308/ffmpeg-mp4-player/commit/86620109a22691df3e6b7cde75977b37e3452f50))
+
+### Bug Fixes
+
+* localStorage 访问被拒（SecurityError）时播放器启动崩溃，降级为无缓存 ([a0541e5](https://github.com/mitch308/ffmpeg-mp4-player/commit/a0541e5920f69bcde58534d6c97063cbf10672d7))
+
 ## [1.2.2](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.1...v1.2.2) (2026-09-17)
 
 ### Features
