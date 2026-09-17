@@ -205,15 +205,16 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
     unmutedBox.classList.toggle('hidden', video.muted);
   };
 
-  // 音量/静音变化上报父窗口（iframe 嵌入时）；消息格式见 README
-  const postVolumeChange = (): void => {
+  // 向父窗口上报播放器状态（iframe 嵌入时）；消息格式见 README
+  const postToParent = (msg: Record<string, unknown>): void => {
     if (window.parent === window) return;
     try {
-      window.parent.postMessage(
-        { source: 'fmp4-player', type: 'volumechange', volume: video.volume, muted: video.muted },
-        '*'
-      );
+      window.parent.postMessage({ source: 'fmp4-player', ...msg }, '*');
     } catch { /* 目标源限制等：静默放弃 */ }
+  };
+
+  const postVolumeChange = (): void => {
+    postToParent({ type: 'volumechange', volume: video.volume, muted: video.muted });
   };
 
   // volumechange 是音量/静音变化的唯一汇聚点（拖音量条/静音切换/键盘），在此统一缓存+上报
@@ -264,10 +265,17 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
 
   const isPlaying = (): boolean => !video.paused && !video.ended;
 
+  // 控制栏显隐上报父窗口：边沿触发，仅在状态变化时发（初始渲染时发一次 true）
+  let lastPostedControls: boolean | null = null;
+
   const applyVisibility = (): void => {
     header.classList.toggle('is-hidden', !controlsVisible);
     controller.classList.toggle('is-hidden', !controlsVisible);
     if (!controlsVisible) hideExt();
+    if (controlsVisible !== lastPostedControls) {
+      lastPostedControls = controlsVisible;
+      postToParent({ type: 'controllerchange', visible: controlsVisible });
+    }
   };
 
   function clearHideTimer(): void {

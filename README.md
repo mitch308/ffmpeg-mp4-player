@@ -179,6 +179,9 @@ window.addEventListener('message', (e) => {
   if (e.data.type === 'volumechange') {
     console.log(e.data.volume, e.data.muted); // volume: 0~1 小数；muted: boolean
   }
+  if (e.data.type === 'controllerchange') {
+    console.log(e.data.visible); // 控制栏显隐（边沿触发，挂载后先收到一次 true）
+  }
 });
 ```
 
