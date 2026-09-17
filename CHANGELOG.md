@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.2](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.1...v1.2.2) (2026-09-17)
+
+### Features
+
+* 音量/静音 localStorage 缓存，变化经 postMessage 上报父窗口 ([8f82e79](https://github.com/mitch308/ffmpeg-mp4-player/commit/8f82e79877340062bbee203e81a29732370ecde9))
+
 ## [1.2.1](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.0...v1.2.1) (2026-09-17)
 
 ### Bug Fixes
