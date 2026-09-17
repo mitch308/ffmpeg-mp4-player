@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   const quality = parseParam<QualityId>(params.get('quality'), ['origin', '720p', '1080p', '2k']) ?? 'origin';
   const mode = parseParam<ModeId>(params.get('mode'), ['auto', 'hw', 'sw']) ?? 'auto';
 
-  app.textContent = '正在加载…';
+  // 只显示 loading 图标，不加文案
   const spinner = document.createElement('span');
   spinner.className = 'loader';
   app.appendChild(spinner);
