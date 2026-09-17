@@ -6,6 +6,7 @@
 // - 拖拽进度条仅 UI 预览，松手才 seek（服务端 seek 成本高，与参考组件的有意差异）
 import { injectIcon, type IconName } from './icons';
 import type { ModeId, PlayerCore, PlayerCoreCallbacks, QualityId } from './player-core';
+import { saveVolumeCache } from './volume-persist';
 
 const PLAYBACK_RATES = [0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 // 展示顺序高→低（服务端返回的 qualities 即此序）
@@ -204,6 +205,24 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
     unmutedBox.classList.toggle('hidden', video.muted);
   };
 
+  // 音量/静音变化上报父窗口（iframe 嵌入时）；消息格式见 README
+  const postVolumeChange = (): void => {
+    if (window.parent === window) return;
+    try {
+      window.parent.postMessage(
+        { source: 'fmp4-player', type: 'volumechange', volume: video.volume, muted: video.muted },
+        '*'
+      );
+    } catch { /* 目标源限制等：静默放弃 */ }
+  };
+
+  // volumechange 是音量/静音变化的唯一汇聚点（拖音量条/静音切换/键盘），在此统一缓存+上报
+  video.addEventListener('volumechange', () => {
+    renderVolume();
+    saveVolumeCache(video.volume, video.muted);
+    postVolumeChange();
+  });
+
   const renderQuality = (): void => {
     qualityLabel.textContent = QUALITY_LABELS[core.quality] ?? '原画质';
     qualityList.querySelectorAll('span').forEach(el => {
@@ -233,7 +252,6 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
   video.addEventListener('seeked', renderTime);
   video.addEventListener('play', () => { renderPlayState(); scheduleHide(); });
   video.addEventListener('pause', () => { renderPlayState(); showControlsNow(); });
-  video.addEventListener('volumechange', renderVolume);
   video.addEventListener('ended', () => showControlsNow());
 
   // ===== 控制栏显隐（移植 VideoPlayer.vue）=====
@@ -509,6 +527,7 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
 
   renderPlayState();
   renderVolume();
+  postVolumeChange(); // 挂载即上报初始音量/静音（entry 的初始值此时已应用，父窗口无需等用户操作）
   renderTime();
   renderQuality();
   renderDecode();
