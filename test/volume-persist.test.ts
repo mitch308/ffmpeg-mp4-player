@@ -71,4 +71,20 @@ describe('音量/静音缓存', () => {
       if (saved) globalAny.localStorage = saved;
     }
   });
+
+  test('window.localStorage 属性访问被拒（SecurityError）时不抛错，等价无缓存', () => {
+    // 真实场景：跨域 iframe + 禁第三方 Cookie / opaque origin 下，读 window.localStorage
+    // 属性本身即抛 SecurityError（Chrome "Access is denied for this document"）
+    const globalAny = globalThis as { localStorage?: Storage };
+    Object.defineProperty(globalAny, 'localStorage', {
+      configurable: true,
+      get() { throw new Error('Access is denied for this document.'); }
+    });
+    try {
+      expect(() => saveVolumeCache(0.5, false)).not.toThrow();
+      expect(loadVolumeCache()).toEqual({ volume: null, muted: null });
+    } finally {
+      delete (globalAny as { localStorage?: Storage }).localStorage;
+    }
+  });
 });

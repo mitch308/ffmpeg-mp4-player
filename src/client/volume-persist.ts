@@ -11,8 +11,14 @@ export interface VolumeCache {
 
 function resolveStorage(storage?: Storage): Storage | null {
   if (storage) return storage;
-  const g = globalThis as { localStorage?: Storage };
-  return g.localStorage ?? null;
+  // 注意：读取 window.localStorage 属性本身也可能抛 SecurityError（跨域 iframe +
+  // 禁第三方 Cookie / opaque origin），必须一并 try/catch，否则播放器启动崩溃
+  try {
+    const g = globalThis as { localStorage?: Storage };
+    return g.localStorage ?? null;
+  } catch {
+    return null; // 存储被禁 → 等价无缓存，走默认值
+  }
 }
 
 /** 读取缓存；无缓存或数据无效时对应字段为 null */
