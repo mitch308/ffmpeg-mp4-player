@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.1](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.0...v1.2.1) (2026-09-17)
+
+### Bug Fixes
+
+* 退出全屏图标更换为设计稿版本，加载期只显示图标不显示文案 ([1d8191c](https://github.com/mitch308/ffmpeg-mp4-player/commit/1d8191c527b23602178499c4d16be8f1e7b231f0))
+
 ## [1.2.0](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.1.0...v1.2.0) (2026-09-16)
 
 ### Features
