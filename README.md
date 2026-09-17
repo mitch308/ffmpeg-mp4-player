@@ -167,9 +167,20 @@ CLI 从环境变量读取 `PORT` 与 `HOST`（`--port`/`--host` 参数优先）�
 | `mode` | `auto` | 解码模式：`auto`（自动，直通优先）/ `hw`（硬解硬编）/ `sw`（软解软编）；硬解不可用时菜单不显示硬解选项 |
 | `autoplay` | `1` | 自动播放；无手势策略可能拦截，用户点一下播放即可 |
 | `volume` | `1` | 初始音量：`0`~`1`（小数，如 `0.5`）或 `1`~`100`（百分数，如 `50`） |
-| `mute` | `0` | `1` 静音起播，点音量图标/条解除 |
+| `mute` | `0` | `1` 静音起播，点音量图标/条解除；`0` 显式不静音 |
 | `highwater` | 服务端配置 | 读泵高水位（秒）：覆盖 `/api/player-config` 下发的值 |
 | `lowwater` | 服务端配置 | 读泵低水位（秒）：覆盖 `/api/player-config` 下发的值；非法组合（low ≥ high）整体回退默认 |
+
+音量/静音会自动记入 `localStorage`（key `fmp4-player:volume`），下次打开未传 `volume`/`mute` 时沿用上次设置；显式传参优先于缓存，两个维度相互独立。播放器处于 iframe 中时，音量或静音变化（含挂载后的初始值）会通过 `postMessage` 通知父窗口：
+
+```js
+window.addEventListener('message', (e) => {
+  if (e.data?.source !== 'fmp4-player') return;
+  if (e.data.type === 'volumechange') {
+    console.log(e.data.volume, e.data.muted); // volume: 0~1 小数；muted: boolean
+  }
+});
+```
 
 ### 画质阶梯
 

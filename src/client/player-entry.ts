@@ -7,12 +7,14 @@
 //   mode     解码模式 auto|hw|sw（默认 auto）
 //   autoplay 1（默认）| 0；注意浏览器无手势策略可能拦截自动播放
 //   volume   初始音量：0~1（小数）或 1~100（百分数），默认 1
-//   mute     1 静音起播（默认 0）
+//   mute     1 静音起播，0 显式不静音（默认 0）
+//   音量/静音默认值优先级：URL 显式传参 > localStorage 缓存（见 volume-persist）> 内置默认
 //   highwater 读泵高水位（秒，默认取服务端配置或 45）
 //   lowwater  读泵低水位（秒，默认取服务端配置或 15）
 import { PlayerCore, type ModeId, type PlayerCoreCallbacks, type QualityId } from './player-core';
 import { mountPlayerUI } from './player-ui';
 import { clientLog } from './logger';
+import { loadVolumeCache } from './volume-persist';
 import './player.css';
 
 const DEFAULT_HIGH_WATER = 45;
@@ -47,8 +49,10 @@ async function main(): Promise<void> {
   const ui = params.get('ui') === 'tv' ? 'tv' : 'pc';
   const title = params.get('title') ?? '';
   const autoplay = params.get('autoplay') !== '0';
-  const volume = parseVolume(params.get('volume'));
-  const mute = params.get('mute') === '1';
+  const volumeParam = parseVolume(params.get('volume'));
+  const muteExplicit = params.has('mute');
+  const muteParam = params.get('mute') === '1';
+  const volumeCache = loadVolumeCache();
   const quality = parseParam<QualityId>(params.get('quality'), ['origin', '720p', '1080p', '2k']) ?? 'origin';
   const mode = parseParam<ModeId>(params.get('mode'), ['auto', 'hw', 'sw']) ?? 'auto';
 
@@ -87,12 +91,13 @@ async function main(): Promise<void> {
   }
   spinner.classList.add('hidden');
 
-  // 初始音量/静音：在 mountPlayerUI 之前设置，让首次 renderVolume 即反映正确状态
-  if (volume !== null) {
-    core.video.volume = volume;
-    core.video.muted = volume === 0;
-  }
-  if (mute) core.video.muted = true;
+  // 初始音量/静音：URL 显式传参 > localStorage 缓存 > 默认（1 / 不静音）；
+  // 两个维度相互独立（只传一个参数时另一维度仍走缓存）。在 mountPlayerUI
+  // 之前设置，让首次 renderVolume 即反映正确状态
+  core.video.volume = volumeParam ?? volumeCache.volume ?? 1;
+  core.video.muted = volumeParam === 0
+    ? true
+    : muteExplicit ? muteParam : volumeCache.muted ?? false;
 
   mountPlayerUI({ root: app, core, callbacks, title, ui });
   core.start(0, autoplay);
