@@ -32,6 +32,8 @@
 
 ## 踩坑记录
 
+- Windows 上 Node `child_process`（spawn/execFile/fork）默认 `windowsHide: false`，每个控制台程序子进程（ffmpeg/ffprobe/taskkill/node）都会新建控制台窗口，进程退出即关闭——表现为测试时终端窗口不停闪现。所有子进程调用点必须带 `windowsHide: true`（POSIX 无操作，跨平台安全）；`ForkOptions` 类型未收录该选项（运行时会透传给 spawn），需用 `...({ windowsHide: true } as object)` 展开绕过 TS 多余属性检查。
+
 - Windows 上杀 ffmpeg 必须用 `taskkill /pid X /T /F`（杀进程树）；直接 `proc.kill()` 会留孤儿进程。用 `src/lib/ffmpeg-process.ts` 里现成的异步 spawn 写法——不要改成同步。
 - Seek = 杀旧 ffmpeg + 带 `-ss` 重新拉起。新的流请求不能杀掉不是自己启动的进程：调用方需比较 `session.process` 身份（见 `src/server.ts` 的 close handler）。
 - ffmpeg 自然退出时必须清掉 `session.process = null`，否则空闲清理定时器会无限续期，导致会话泄漏。

@@ -18,7 +18,8 @@ describe('CLI', () => {
     })();
 
     const child = spawn(process.execPath, [BIN, '--port', String(port)], {
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
     });
     try {
       // 等待服务就绪
@@ -46,7 +47,8 @@ describe('CLI', () => {
   test('二进制路径无效时 CLI 报错退出（退出码非 0）', async () => {
     const child = spawn(process.execPath, [BIN], {
       env: { ...process.env, FFMPEG_PATH: 'C:/不存在/ffmpeg.exe' },
-      stdio: 'ignore'
+      stdio: 'ignore',
+      windowsHide: true
     });
     const code = await new Promise<number | null>((r) => child.once('exit', (c) => r(c)));
     expect(code).not.toBe(0);

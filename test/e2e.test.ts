@@ -24,6 +24,7 @@ afterAll(async () => {
 function ffprobeJson(file: string): Promise<any> {
   return new Promise((resolve, reject) => {
     execFile(getFfprobePath(), ['-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', file],
+      { windowsHide: true },
       (err, stdout) => (err ? reject(err) : resolve(JSON.parse(stdout))));
   });
 }

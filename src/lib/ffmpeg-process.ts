@@ -123,7 +123,9 @@ export function createFfmpegProcess({ url, startTime, strategy, sessionId, onDat
   const args = buildArgs(url, startTime, strategy);
 
   const proc = spawn(getFfmpegPath(), args, {
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    // Windows 上隐藏子进程控制台窗口（POSIX 无操作），避免不停闪窗
+    windowsHide: true
   });
 
   // 日志标签：进程 + 会话双标识，单看一行即可定位是哪个会话的哪次起播
@@ -175,7 +177,8 @@ export function createFfmpegProcess({ url, startTime, strategy, sessionId, onDat
       if (process.platform === 'win32') {
         try {
           const tk = spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], {
-            stdio: 'ignore'
+            stdio: 'ignore',
+            windowsHide: true
           });
           tk.on('error', () => { /* 进程可能已退出 */ });
         } catch (e) {

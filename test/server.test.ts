@@ -75,7 +75,7 @@ describe('startServer 本进程模式', () => {
       '-i', samples.h264Aac,
       '-c', 'copy', '-movflags', '+faststart',
       '-y', faststartPath
-    ], { stdio: 'pipe' });
+    ], { stdio: 'pipe', windowsHide: true });
     const fileBytes = readFileSync(faststartPath);
 
     const stallServer = http.createServer((_req, res) => {

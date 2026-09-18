@@ -47,6 +47,7 @@ test('HEVC 8bit → 硬解提示 + 硬件编码，产物 8bit H.264', async (ctx
   fs.writeFileSync(out, Buffer.concat(chunks));
   const j = await new Promise<any>((resolve, reject) =>
     execFile(getFfprobePath(), ['-v', 'quiet', '-print_format', 'json', '-show_streams', out],
+      { windowsHide: true },
       (e, o) => e ? reject(e) : resolve(JSON.parse(o))));
   const v = j.streams.find((x: any) => x.codec_type === 'video');
   assert.strictEqual(v.codec_name, 'h264');
@@ -87,6 +88,7 @@ test('HEVC 10bit → 软解 + 硬件编码，产物 8bit H.264', async (ctx) => 
   fs.writeFileSync(out, Buffer.concat(chunks));
   const j = await new Promise<any>((resolve, reject) =>
     execFile(getFfprobePath(), ['-v', 'quiet', '-print_format', 'json', '-show_streams', out],
+      { windowsHide: true },
       (e, o) => e ? reject(e) : resolve(JSON.parse(o))));
   const v = j.streams.find((x: any) => x.codec_type === 'video');
   assert.strictEqual(v.codec_name, 'h264');
