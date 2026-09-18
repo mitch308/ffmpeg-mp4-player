@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.4](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.3...v1.2.4) (2026-09-18)
+
+### Features
+
+* 父窗口 postMessage 控制播放/暂停，空格键切播放暂停 ([1302149](https://github.com/mitch308/ffmpeg-mp4-player/commit/1302149e18c4420397f72ffea5fa94fa620c0d61))
+
+### Bug Fixes
+
+* 所有子进程调用点加 windowsHide:true，消除 Windows 测试闪窗 ([78e5ab4](https://github.com/mitch308/ffmpeg-mp4-player/commit/78e5ab4e0ba540d50e8c3aa16e675eb1a3a8537a))
+
 ## [1.2.3](https://github.com/mitch308/ffmpeg-mp4-player/compare/v1.2.2...v1.2.3) (2026-09-17)
 
 ### Features

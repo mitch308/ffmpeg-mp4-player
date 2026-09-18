@@ -1,6 +1,6 @@
 {
   "name": "@etsme/ffmpeg-mp4-player",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Web video player powered by ffmpeg with MSE streaming (embeddable npm package)",
   "license": "MIT",
   "publishConfig": {
