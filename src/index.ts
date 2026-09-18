@@ -159,6 +159,8 @@ async function startChildProcess(options: PlayerServerOptions): Promise<PlayerSe
   const child: ChildProcess = fork(childEntry, [], {
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     detached: true, // POSIX 上使子进程成为组长，便于 kill(-pid) 杀全组
+    // ForkOptions 类型未收录 windowsHide，运行时会透传给 spawn 隐藏子进程控制台窗口
+    ...({ windowsHide: true } as object),
     env: {
       ...process.env,
       FFMPEG_PLAYER_CHILD_OPTIONS: JSON.stringify(options)

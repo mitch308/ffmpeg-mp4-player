@@ -174,6 +174,7 @@ describe('startServer 子进程模式', () => {
     const childEntry = fileURLToPath(new URL('../dist/child.cjs', import.meta.url));
     const child = fork(childEntry, [], {
       stdio: 'ignore',
+      ...({ windowsHide: true } as object), // ForkOptions 类型未收录，运行时透传生效
       env: { ...process.env, FFMPEG_PLAYER_CHILD_OPTIONS: JSON.stringify({ ffmpegPath: 'C:/不存在的ffmpeg.exe' }) }
     });
     const message = await new Promise<{ type: string; message?: string }>((resolve, reject) => {

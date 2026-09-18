@@ -40,7 +40,7 @@ export function probe(url: string): Promise<ProbeResult> {
       normalizeLocalhostUrl(url)
     ];
 
-    const proc = spawn(ffprobePath, args);
+    const proc = spawn(ffprobePath, args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
 

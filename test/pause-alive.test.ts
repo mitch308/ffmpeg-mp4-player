@@ -48,7 +48,7 @@ async function startSourceServer(): Promise<{ url: string; killAll(): void; clos
       '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=15',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
       '-t', '3600', '-f', 'mpegts', 'pipe:1'
-    ], { stdio: ['ignore', 'pipe', 'ignore'] });
+    ], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     sources.add(src);
     src.stdout.pipe(res);
     const cleanup = () => { sources.delete(src); try { src.kill('SIGKILL'); } catch { /* 已退出 */ } };

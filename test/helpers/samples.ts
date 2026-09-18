@@ -36,7 +36,7 @@ export function ensureSamples(): Samples {
       args.push('-an');
     }
     args.push(...videoArgs, '-shortest', '-y', out);
-    execFileSync(ff, args, { stdio: 'pipe' });
+    execFileSync(ff, args, { stdio: 'pipe', windowsHide: true });
     return out;
   };
 

@@ -10,7 +10,7 @@ export function killProcessTree(pid: number): Promise<void> {
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
       try {
-        const tk = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+        const tk = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
         tk.on('error', () => resolve()); // 进程可能已退出
         tk.on('close', () => resolve());
       } catch {

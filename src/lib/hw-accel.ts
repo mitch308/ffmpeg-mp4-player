@@ -126,7 +126,7 @@ export function pickEncoder(available: Set<string>): string {
 
 function listCompiledEncoders(): Promise<string> {
   return new Promise((resolve) => {
-    const proc = spawn(getFfmpegPath(), ['-hide_banner', '-encoders'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const proc = spawn(getFfmpegPath(), ['-hide_banner', '-encoders'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     let stdout = '';
     proc.stdout.on('data', (c) => { stdout += c; });
     proc.on('error', () => resolve(''));   // spawn 失败 → 空集合，后面全走 libx264
@@ -146,7 +146,7 @@ function verifyEncoder(encoder: string): Promise<boolean> {
       ...(profile ? profile.encodeArgs : []),
       '-f', 'null', '-'
     ];
-    const proc = spawn(getFfmpegPath(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const proc = spawn(getFfmpegPath(), args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     let settled = false;
     const done = (ok: boolean) => {
       if (settled) return;
