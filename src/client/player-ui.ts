@@ -338,8 +338,7 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
     clickTimer = window.setTimeout(() => {
       clickTimer = null;
       // 单击：切播放/暂停
-      if (video.paused) void video.play().catch(() => { /* 被阻止 */ });
-      else video.pause();
+      togglePlay();
     }, DBLCLICK_MS);
   });
   layer.addEventListener('mousemove', handleMouseMove);
@@ -510,11 +509,27 @@ export function mountPlayerUI(opts: PlayerUIOptions): void {
 
   // ===== 键盘（等价参考组件 Mousetrap 绑定）=====
 
+  const togglePlay = (): void => {
+    if (video.paused) void video.play().catch(() => { /* 被阻止 */ });
+    else video.pause();
+  };
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') core.seek(Math.max(0, video.currentTime - 5));
     else if (e.key === 'ArrowRight') core.seek(video.currentTime + 5);
     else if (e.key === 'ArrowUp') { setVolume(video.volume + 0.05); e.preventDefault(); }
     else if (e.key === 'ArrowDown') { setVolume(video.volume - 0.05); e.preventDefault(); }
+    else if (e.key === ' ') { e.preventDefault(); togglePlay(); } // 空格切播放/暂停（防页面滚动）
+  });
+
+  // ===== 父窗口控制（iframe 嵌入时）：postMessage 播放/暂停，协议见 README =====
+
+  window.addEventListener('message', (e) => {
+    if (e.source !== window.parent) return; // 只接受直接父窗口，防任意页面伪造控制
+    const d = e.data as { source?: unknown; type?: unknown } | null;
+    if (!d || d.source !== 'fmp4-parent') return;
+    if (d.type === 'play') void video.play().catch(() => { /* 被阻止 */ });
+    else if (d.type === 'pause') video.pause();
   });
 
   // ===== 核心回调 → loader / 错误（覆盖 entry 传入的回调容器）=====

@@ -185,6 +185,18 @@ window.addEventListener('message', (e) => {
 });
 ```
 
+### 父窗口控制播放
+
+父窗口向 iframe 发 `postMessage` 可控制播放/暂停（仅接受直接父窗口，`source` 字段须为 `fmp4-parent`）：
+
+```js
+const player = document.querySelector('iframe').contentWindow;
+player.postMessage({ source: 'fmp4-parent', type: 'play' }, '*');
+player.postMessage({ source: 'fmp4-parent', type: 'pause' }, '*');
+```
+
+键盘快捷键：`空格` 播放/暂停、`←`/`→` 快退/快进 5s、`↑`/`↓` 音量 ±5%。
+
 ### 画质阶梯
 
 720p→2.5Mbps、1080p→5Mbps、2K→10Mbps，切换画质从当前播放位置重转码。画面比例（原始/16:9/4:3）为纯前端 CSS 处理，后端输出不变。
